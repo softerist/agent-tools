@@ -578,6 +578,8 @@ function Show-UnsupportedFlag {
         "$Command: unsupported option '$Flag'",
         "Supported flags in fallback: $SupportedFlags",
         "",
+        "Tip: run Get-UnixFallbackCoverage to see current fallback flag coverage.",
+        "",
         "How to add support for this flag:",
         "1) Open `$PROFILE and find marker: # >>> unix-tools-alias-compat >>>",
         "2) Find: Set-UnixCommand -Name ""$Command"" -Fallback { ... }",
@@ -590,26 +592,53 @@ function Show-UnsupportedFlag {
     throw $message
 }
 
+$script:UnixFallbackCoverage = [ordered]@{
+    rm    = "-r, -R, -f, --"
+    cp    = "-r, -R, -f, -n, --"
+    mv    = "-f, -n, --"
+    mkdir = "-p, -v, --"
+    ls    = "-a, -l, -t, -r, -h, --"
+    cat   = "-n, -s, --"
+    sort  = "-u, -r, -n, -f, --"
+    diff  = "-u, -q, --"
+    tee   = "-a, -i, --"
+    sleep = "NUMBER[s|m|h|d]"
+}
+
+function Get-UnixFallbackCoverage {
+    $script:UnixFallbackCoverage.GetEnumerator() | ForEach-Object {
+        [pscustomobject]@{
+            Command = $_.Key
+            Flags   = $_.Value
+        }
+    }
+}
+
 Set-UnixCommand -Name "rm" -Fallback {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
     $recurse = $false
     $force = $false
     $paths = @()
+    $parseOptions = $true
     foreach ($a in $Args) {
-        if ($a -match '^-[A-Za-z]+$') {
+        if ($parseOptions -and $a -eq "--") {
+            $parseOptions = $false
+            continue
+        }
+        if ($parseOptions -and $a -match '^-[A-Za-z]+$') {
             foreach ($ch in $a.Substring(1).ToCharArray()) {
                 switch ($ch) {
                     'r' { $recurse = $true; continue }
                     'R' { $recurse = $true; continue }
                     'f' { $force = $true; continue }
-                    default { Show-UnsupportedFlag -Command "rm" -Flag ("-" + $ch) -SupportedFlags "-r, -R, -f" -Usage "rm [-rf] <path...>" }
+                    default { Show-UnsupportedFlag -Command "rm" -Flag ("-" + $ch) -SupportedFlags "-r, -R, -f, --" -Usage "rm [-rf] [--] <path...>" }
                 }
             }
         } else {
             $paths += $a
         }
     }
-    if ($paths.Count -eq 0) { throw "usage: rm [-rf] <path...>" }
+    if ($paths.Count -eq 0) { throw "usage: rm [-rf] [--] <path...>" }
     Remove-Item -Path $paths -Recurse:$recurse -Force:$force
 }
 
@@ -617,68 +646,115 @@ Set-UnixCommand -Name "cp" -Fallback {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
     $recurse = $false
     $force = $false
+    $noClobber = $false
     $items = @()
+    $parseOptions = $true
     foreach ($a in $Args) {
-        if ($a -match '^-[A-Za-z]+$') {
+        if ($parseOptions -and $a -eq "--") {
+            $parseOptions = $false
+            continue
+        }
+        if ($parseOptions -and $a -match '^-[A-Za-z]+$') {
             foreach ($ch in $a.Substring(1).ToCharArray()) {
                 switch ($ch) {
                     'r' { $recurse = $true; continue }
                     'R' { $recurse = $true; continue }
                     'f' { $force = $true; continue }
-                    default { Show-UnsupportedFlag -Command "cp" -Flag ("-" + $ch) -SupportedFlags "-r, -R, -f" -Usage "cp [-rf] <src...> <dest>" }
+                    'n' { $noClobber = $true; continue }
+                    default { Show-UnsupportedFlag -Command "cp" -Flag ("-" + $ch) -SupportedFlags "-r, -R, -f, -n, --" -Usage "cp [-rfn] [--] <src...> <dest>" }
                 }
             }
         } else {
             $items += $a
         }
     }
-    if ($items.Count -lt 2) { throw "usage: cp [-rf] <src...> <dest>" }
+    if ($items.Count -lt 2) { throw "usage: cp [-rfn] [--] <src...> <dest>" }
     $dest = $items[-1]
     $src = $items[0..($items.Count - 2)]
-    Copy-Item -Path $src -Destination $dest -Recurse:$recurse -Force:$force
+
+    if (-not $noClobber) {
+        Copy-Item -Path $src -Destination $dest -Recurse:$recurse -Force:$force
+        return
+    }
+
+    foreach ($s in $src) {
+        $target = $dest
+        if (Test-Path -Path $dest -PathType Container) {
+            $target = Join-Path $dest (Split-Path -Leaf $s)
+        }
+        if (Test-Path -Path $target) { continue }
+        Copy-Item -Path $s -Destination $dest -Recurse:$recurse -Force:$force
+    }
 }
 
 Set-UnixCommand -Name "mv" -Fallback {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
     $force = $false
+    $noClobber = $false
     $items = @()
+    $parseOptions = $true
     foreach ($a in $Args) {
-        if ($a -match '^-[A-Za-z]+$') {
+        if ($parseOptions -and $a -eq "--") {
+            $parseOptions = $false
+            continue
+        }
+        if ($parseOptions -and $a -match '^-[A-Za-z]+$') {
             foreach ($ch in $a.Substring(1).ToCharArray()) {
                 switch ($ch) {
                     'f' { $force = $true; continue }
-                    default { Show-UnsupportedFlag -Command "mv" -Flag ("-" + $ch) -SupportedFlags "-f" -Usage "mv [-f] <src...> <dest>" }
+                    'n' { $noClobber = $true; continue }
+                    default { Show-UnsupportedFlag -Command "mv" -Flag ("-" + $ch) -SupportedFlags "-f, -n, --" -Usage "mv [-fn] [--] <src...> <dest>" }
                 }
             }
         } else {
             $items += $a
         }
     }
-    if ($items.Count -lt 2) { throw "usage: mv [-f] <src...> <dest>" }
+    if ($items.Count -lt 2) { throw "usage: mv [-fn] [--] <src...> <dest>" }
     $dest = $items[-1]
     $src = $items[0..($items.Count - 2)]
-    Move-Item -Path $src -Destination $dest -Force:$force
+    if (-not $noClobber) {
+        Move-Item -Path $src -Destination $dest -Force:$force
+        return
+    }
+
+    foreach ($s in $src) {
+        $target = $dest
+        if (Test-Path -Path $dest -PathType Container) {
+            $target = Join-Path $dest (Split-Path -Leaf $s)
+        }
+        if (Test-Path -Path $target) { continue }
+        Move-Item -Path $s -Destination $dest -Force:$force
+    }
 }
 
 Set-UnixCommand -Name "mkdir" -Fallback {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
     $p = $false
+    $verbose = $false
     $paths = @()
+    $parseOptions = $true
     foreach ($a in $Args) {
-        if ($a -match '^-[A-Za-z]+$') {
+        if ($parseOptions -and $a -eq "--") {
+            $parseOptions = $false
+            continue
+        }
+        if ($parseOptions -and $a -match '^-[A-Za-z]+$') {
             foreach ($ch in $a.Substring(1).ToCharArray()) {
                 switch ($ch) {
                     'p' { $p = $true; continue }
-                    default { Show-UnsupportedFlag -Command "mkdir" -Flag ("-" + $ch) -SupportedFlags "-p" -Usage "mkdir [-p] <dir...>" }
+                    'v' { $verbose = $true; continue }
+                    default { Show-UnsupportedFlag -Command "mkdir" -Flag ("-" + $ch) -SupportedFlags "-p, -v, --" -Usage "mkdir [-pv] [--] <dir...>" }
                 }
             }
         } else {
             $paths += $a
         }
     }
-    if ($paths.Count -eq 0) { throw "usage: mkdir [-p] <dir...>" }
+    if ($paths.Count -eq 0) { throw "usage: mkdir [-pv] [--] <dir...>" }
     foreach ($path in $paths) {
         New-Item -ItemType Directory -Path $path -Force:$p | Out-Null
+        if ($verbose) { "mkdir: created directory '$path'" }
     }
 }
 
@@ -686,14 +762,24 @@ Set-UnixCommand -Name "ls" -Fallback {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
     $all = $false
     $long = $false
+    $sortTime = $false
+    $reverse = $false
     $paths = @()
+    $parseOptions = $true
     foreach ($a in $Args) {
-        if ($a -match '^-[A-Za-z]+$') {
+        if ($parseOptions -and $a -eq "--") {
+            $parseOptions = $false
+            continue
+        }
+        if ($parseOptions -and $a -match '^-[A-Za-z]+$') {
             foreach ($ch in $a.Substring(1).ToCharArray()) {
                 switch ($ch) {
                     'a' { $all = $true; continue }
                     'l' { $long = $true; continue }
-                    default { Show-UnsupportedFlag -Command "ls" -Flag ("-" + $ch) -SupportedFlags "-a, -l" -Usage "ls [-la] [path...]" }
+                    't' { $sortTime = $true; continue }
+                    'r' { $reverse = $true; continue }
+                    'h' { continue }
+                    default { Show-UnsupportedFlag -Command "ls" -Flag ("-" + $ch) -SupportedFlags "-a, -l, -t, -r, -h, --" -Usage "ls [-lathr] [--] [path...]" }
                 }
             }
         } else {
@@ -702,6 +788,12 @@ Set-UnixCommand -Name "ls" -Fallback {
     }
     if ($paths.Count -eq 0) { $paths = @(".") }
     $items = Get-ChildItem -Path $paths -Force:$all
+    if ($sortTime) { $items = $items | Sort-Object LastWriteTime -Descending }
+    if ($reverse) {
+        $arr = @($items)
+        if ($arr.Count -gt 1) { [array]::Reverse($arr) }
+        $items = $arr
+    }
     if ($long) {
         $items | Format-Table Mode, LastWriteTime, @{N='Length';E={ if ($_.PSIsContainer) { '' } else { $_.Length } }}, Name -AutoSize
     } else {
@@ -712,14 +804,32 @@ Set-UnixCommand -Name "ls" -Fallback {
 Set-UnixCommand -Name "cat" -Fallback {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
     $number = $false
+    $squeezeBlank = $false
     $paths = @()
+    $parseOptions = $true
     foreach ($a in $Args) {
-        if ($a -eq "-n") { $number = $true; continue }
-        if ($a -match '^-[A-Za-z]+$') { Show-UnsupportedFlag -Command "cat" -Flag $a -SupportedFlags "-n" -Usage "cat [-n] [file...]" }
+        if ($parseOptions -and $a -eq "--") {
+            $parseOptions = $false
+            continue
+        }
+        if ($parseOptions -and $a -eq "-n") { $number = $true; continue }
+        if ($parseOptions -and $a -eq "-s") { $squeezeBlank = $true; continue }
+        if ($parseOptions -and $a -match '^-[A-Za-z]+$') { Show-UnsupportedFlag -Command "cat" -Flag $a -SupportedFlags "-n, -s, --" -Usage "cat [-ns] [--] [file...]" }
         $paths += $a
     }
 
     $lines = if ($paths.Count -gt 0) { Get-Content -Path $paths } else { @($input) }
+    if ($squeezeBlank) {
+        $out = New-Object System.Collections.Generic.List[string]
+        $prevBlank = $false
+        foreach ($line in $lines) {
+            $isBlank = [string]::IsNullOrWhiteSpace($line)
+            if ($isBlank -and $prevBlank) { continue }
+            $out.Add($line)
+            $prevBlank = $isBlank
+        }
+        $lines = $out
+    }
     if ($number) {
         $i = 0
         $lines | ForEach-Object { $i++; "{0,6}  {1}" -f $i, $_ }
@@ -731,36 +841,97 @@ Set-UnixCommand -Name "cat" -Fallback {
 Set-UnixCommand -Name "sort" -Fallback {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
     $unique = $false
+    $descending = $false
+    $numeric = $false
+    $ignoreCase = $false
     $paths = @()
+    $parseOptions = $true
     foreach ($a in $Args) {
-        if ($a -eq "-u") { $unique = $true; continue }
-        if ($a -match '^-[A-Za-z]+$') { Show-UnsupportedFlag -Command "sort" -Flag $a -SupportedFlags "-u" -Usage "sort [-u] [file...]" }
+        if ($parseOptions -and $a -eq "--") {
+            $parseOptions = $false
+            continue
+        }
+        if ($parseOptions -and $a -match '^-[A-Za-z]+$') {
+            foreach ($ch in $a.Substring(1).ToCharArray()) {
+                switch ($ch) {
+                    'u' { $unique = $true; continue }
+                    'r' { $descending = $true; continue }
+                    'n' { $numeric = $true; continue }
+                    'f' { $ignoreCase = $true; continue }
+                    default { Show-UnsupportedFlag -Command "sort" -Flag ("-" + $ch) -SupportedFlags "-u, -r, -n, -f, --" -Usage "sort [-urnf] [--] [file...]" }
+                }
+            }
+            continue
+        }
         $paths += $a
     }
 
     $lines = if ($paths.Count -gt 0) { Get-Content -Path $paths } else { @($input) }
-    if ($unique) { $lines | Sort-Object -Unique } else { $lines | Sort-Object }
+    $opts = @{}
+    if ($unique) { $opts.Unique = $true }
+    if ($descending) { $opts.Descending = $true }
+    if ($ignoreCase) { $opts.CaseSensitive = $false }
+
+    if ($numeric) {
+        $sorted = $lines | Sort-Object {[double]($_ -as [double])} @opts
+    } else {
+        $sorted = $lines | Sort-Object @opts
+    }
+    $sorted
 }
 
 Set-UnixCommand -Name "diff" -Fallback {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
     $files = @()
+    $brief = $false
+    $parseOptions = $true
     foreach ($a in $Args) {
-        if ($a -eq "-u") { continue }
-        if ($a -match '^-[A-Za-z]+$') { Show-UnsupportedFlag -Command "diff" -Flag $a -SupportedFlags "-u" -Usage "diff [-u] <file1> <file2>" }
+        if ($parseOptions -and $a -eq "--") {
+            $parseOptions = $false
+            continue
+        }
+        if ($parseOptions -and $a -match '^-[A-Za-z]+$') {
+            foreach ($ch in $a.Substring(1).ToCharArray()) {
+                switch ($ch) {
+                    'u' { continue }
+                    'q' { $brief = $true; continue }
+                    default { Show-UnsupportedFlag -Command "diff" -Flag ("-" + $ch) -SupportedFlags "-u, -q, --" -Usage "diff [-uq] [--] <file1> <file2>" }
+                }
+            }
+            continue
+        }
         $files += $a
     }
-    if ($files.Count -lt 2) { throw "usage: diff [-u] <file1> <file2>" }
-    Compare-Object -ReferenceObject (Get-Content -Path $files[0]) -DifferenceObject (Get-Content -Path $files[1])
+    if ($files.Count -lt 2) { throw "usage: diff [-uq] [--] <file1> <file2>" }
+    $result = Compare-Object -ReferenceObject (Get-Content -Path $files[0]) -DifferenceObject (Get-Content -Path $files[1])
+    if ($brief) {
+        if ($result) { "Files $($files[0]) and $($files[1]) differ" }
+        return
+    }
+    $result
 }
 
 Set-UnixCommand -Name "tee" -Fallback {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
     $append = $false
+    $ignoreInterrupt = $false
     $files = @()
+    $parseOptions = $true
     foreach ($a in $Args) {
-        if ($a -eq "-a") { $append = $true; continue }
-        if ($a -match '^-[A-Za-z]+$') { Show-UnsupportedFlag -Command "tee" -Flag $a -SupportedFlags "-a" -Usage "tee [-a] <file...>" }
+        if ($parseOptions -and $a -eq "--") {
+            $parseOptions = $false
+            continue
+        }
+        if ($parseOptions -and $a -match '^-[A-Za-z]+$') {
+            foreach ($ch in $a.Substring(1).ToCharArray()) {
+                switch ($ch) {
+                    'a' { $append = $true; continue }
+                    'i' { $ignoreInterrupt = $true; continue }
+                    default { Show-UnsupportedFlag -Command "tee" -Flag ("-" + $ch) -SupportedFlags "-a, -i, --" -Usage "tee [-ai] [--] <file...>" }
+                }
+            }
+            continue
+        }
         $files += $a
     }
 
@@ -776,7 +947,18 @@ Set-UnixCommand -Name "tee" -Fallback {
 Set-UnixCommand -Name "sleep" -Fallback {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
     if ($Args.Count -eq 0) { throw "usage: sleep <seconds>" }
-    $seconds = [double]$Args[0]
+    $spec = $Args[0]
+    $m = [regex]::Match($spec, '^\s*(?<n>\d+(?:\.\d+)?)(?<u>[smhd]?)\s*$')
+    if (-not $m.Success) {
+        Show-UnsupportedFlag -Command "sleep" -Flag $spec -SupportedFlags "NUMBER[s|m|h|d]" -Usage "sleep <seconds>|<number>[s|m|h|d]"
+    }
+    $seconds = [double]$m.Groups['n'].Value
+    switch ($m.Groups['u'].Value) {
+        'm' { $seconds *= 60; break }
+        'h' { $seconds *= 3600; break }
+        'd' { $seconds *= 86400; break }
+        default { }
+    }
     Start-Sleep -Seconds $seconds
 }
 '@
