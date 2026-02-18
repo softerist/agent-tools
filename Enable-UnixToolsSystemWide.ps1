@@ -1,4 +1,61 @@
-#Requires -RunAsAdministrator
+<#
+.SYNOPSIS
+    Adds Unix-compatible tools (grep, sed, awk, etc.) to the Windows system PATH.
+
+.DESCRIPTION
+    Discovers Git-for-Windows and exposes its bundled Unix tools system-wide.
+    Optionally creates priority .cmd shims, installs PowerShell profile
+    fallback functions for missing commands, and provides alias-compat
+    wrappers (rm, cp, mv, ls, cat, etc.) that accept common Unix flags.
+
+    Requires an elevated (Administrator) PowerShell session for all
+    operations except -Help.
+
+.PARAMETER CreateShims
+    Generate .cmd shim files in Git\shims and prepend to Machine PATH.
+
+.PARAMETER AddMingw
+    Also add Git's mingw64\bin to Machine PATH.
+
+.PARAMETER AddGitCmd
+    Also add Git's cmd directory to Machine PATH.
+
+.PARAMETER NormalizePath
+    Remove duplicate and trailing-backslash entries from Machine PATH.
+
+.PARAMETER InstallProfileShims
+    Install PowerShell profile blocks for missing-command shims and
+    alias-compat wrappers (rm, cp, mv, ls, cat, sort, diff, tee, sleep).
+
+.PARAMETER Uninstall
+    Remove shim directory, PATH entries, and profile blocks.
+
+.PARAMETER LogPath
+    Path to a transcript log file for this run.
+
+.PARAMETER Help
+    Show this help message and exit (works without elevation).
+
+.EXAMPLE
+    .\Enable-UnixToolsSystemWide.ps1
+    Adds Git usr\bin to Machine PATH.
+
+.EXAMPLE
+    .\Enable-UnixToolsSystemWide.ps1 -CreateShims
+    Creates priority shims and prepends shim dir to PATH.
+
+.EXAMPLE
+    .\Enable-UnixToolsSystemWide.ps1 -CreateShims -InstallProfileShims
+    Full setup: shims + profile fallback functions + alias-compat wrappers.
+
+.EXAMPLE
+    .\Enable-UnixToolsSystemWide.ps1 -Uninstall
+    Removes all shims, PATH entries, and profile blocks.
+
+.EXAMPLE
+    .\Enable-UnixToolsSystemWide.ps1 -Help
+    Shows usage without requiring Administrator elevation.
+#>
 # Enable-UnixToolsSystemWide.ps1
 # Adds Unix-compatible tools (grep, sed, awk, etc.) to the system PATH
 # Run in an elevated PowerShell (Run as Administrator)
@@ -11,6 +68,7 @@
 #   .\Enable-UnixToolsSystemWide.ps1 -NormalizePath
 #   .\Enable-UnixToolsSystemWide.ps1 -InstallProfileShims
 #   .\Enable-UnixToolsSystemWide.ps1 -CreateShims -InstallProfileShims
+#   .\Enable-UnixToolsSystemWide.ps1 -InstallProfileShims -LogPath C:\Temp\unix-tools-install.log
 #   .\Enable-UnixToolsSystemWide.ps1 -Uninstall
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
@@ -20,12 +78,15 @@ param(
     [switch]$AddGitCmd,
     [switch]$NormalizePath,
     [switch]$InstallProfileShims,
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [string]$LogPath,
+    [Alias('h')]
+    [switch]$Help
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$ScriptVersion = "1.3.1"
+$ScriptVersion = "1.4.0"
 
 # ======================== Functions ========================
 
@@ -71,7 +132,7 @@ function Assert-PathLength([string]$PathValue, [string]$Scope = "Machine") {
     }
 }
 
-function Prepend-ToMachinePath([string]$pathToPrepend) {
+function Add-MachinePathPrepend([string]$pathToPrepend) {
     $norm = $pathToPrepend.Trim().TrimEnd('\')
     if (-not (Test-Path $norm)) {
         throw "Path does not exist: $norm"
@@ -92,7 +153,7 @@ function Prepend-ToMachinePath([string]$pathToPrepend) {
     [Environment]::SetEnvironmentVariable("Path", $newPath, "Machine")
 }
 
-function Append-ToMachinePath([string[]]$pathsToAdd) {
+function Add-MachinePathEntries([string[]]$pathsToAdd) {
     $current = [Environment]::GetEnvironmentVariable("Path", "Machine")
     if (-not $current) { $current = "" }
 
@@ -122,7 +183,7 @@ function Append-ToMachinePath([string[]]$pathsToAdd) {
     return $changed
 }
 
-function Remove-FromMachinePath([string[]]$pathsToRemove) {
+function Remove-MachinePathEntries([string[]]$pathsToRemove) {
     $current = [Environment]::GetEnvironmentVariable("Path", "Machine")
     if (-not $current) { return $false }
 
@@ -147,7 +208,7 @@ function Remove-FromMachinePath([string[]]$pathsToRemove) {
     return $true
 }
 
-function Normalize-MachinePath {
+function Update-MachinePathEntries {
     $current = [Environment]::GetEnvironmentVariable("Path","Machine")
     if (-not $current) { return }
 
@@ -166,7 +227,7 @@ function Normalize-MachinePath {
     [Environment]::SetEnvironmentVariable("Path", $newPath, "Machine")
 }
 
-function Ensure-Dir([string]$dir) {
+function New-DirectoryIfMissing([string]$dir) {
     if (-not (Test-Path $dir)) {
         New-Item -ItemType Directory -Path $dir | Out-Null
     }
@@ -195,7 +256,11 @@ function Find-Tool([string]$toolName, [string[]]$searchDirs) {
     return $null
 }
 
-function Find-ToolInPath([string]$toolName, [string]$excludeDir = $null) {
+function Find-ToolInPath([string]$toolName, [string]$excludeDir = $null, [hashtable]$AppIndex = $null) {
+    if ($AppIndex -and $AppIndex.ContainsKey($toolName)) {
+        return $AppIndex[$toolName]
+    }
+
     # Search system PATH for a real executable (useful for ripgrep and non-Git tools).
     try {
         $apps = Get-Command $toolName -CommandType Application -All -ErrorAction SilentlyContinue
@@ -213,6 +278,43 @@ function Find-ToolInPath([string]$toolName, [string]$excludeDir = $null) {
         }
     } catch {}
     return $null
+}
+
+function Get-ApplicationCommandIndex([string]$excludeDir = $null) {
+    $index = @{}
+    try {
+        $apps = Get-Command -CommandType Application -All -ErrorAction SilentlyContinue
+        foreach ($app in $apps) {
+            $name = [System.IO.Path]::GetFileNameWithoutExtension($app.Name)
+            if ([string]::IsNullOrWhiteSpace($name)) { continue }
+            if ($index.ContainsKey($name)) { continue }
+
+            $src = $app.Source
+            if ([string]::IsNullOrWhiteSpace($src)) { continue }
+            if ([System.IO.Path]::GetExtension($src) -ne ".exe") { continue }
+
+            if ($excludeDir) {
+                $normExclude = $excludeDir.Trim().TrimEnd('\')
+                if ($src.StartsWith($normExclude, [StringComparison]::OrdinalIgnoreCase)) { continue }
+            }
+            $index[$name] = $src
+        }
+    } catch {}
+    return $index
+}
+
+function Start-ScriptTranscript([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    Start-Transcript -Path $Path -Append -Force | Out-Null
+    return $true
+}
+
+function Stop-ScriptTranscript {
+    try { Stop-Transcript | Out-Null } catch {}
 }
 
 function Broadcast-EnvironmentChange {
@@ -244,6 +346,20 @@ public class NativeMethods {
 function Refresh-SessionPath {
     $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
                 [Environment]::GetEnvironmentVariable("Path","User")
+}
+
+$script:ProfileBackupPath = $null
+function Backup-ProfileFile {
+    param([Parameter(Mandatory = $true)][string]$ProfilePath)
+
+    if (-not (Test-Path $ProfilePath)) { return $null }
+    if ($script:ProfileBackupPath) { return $script:ProfileBackupPath }
+
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $backup = "$ProfilePath.bak-$stamp"
+    Copy-Item -Path $ProfilePath -Destination $backup -Force
+    $script:ProfileBackupPath = $backup
+    return $backup
 }
 
 function Upsert-ProfileBlock {
@@ -297,15 +413,56 @@ function Remove-ProfileBlock {
     $existing = Get-Content -Path $ProfilePath -Raw -ErrorAction SilentlyContinue
     if ($null -eq $existing -or $existing.Length -eq 0) { return }
 
-    $pattern = "(?s)$([regex]::Escape($StartMarker)).*?$([regex]::Escape($EndMarker))\r?\n?"
-    if ([regex]::IsMatch($existing, $pattern)) {
-        $updated = [regex]::Replace($existing, $pattern, "", 1)
+    # Remove all complete marker blocks, plus any orphan marker lines.
+    $pattern = "(?ms)^\s*$([regex]::Escape($StartMarker))\s*$.*?^\s*$([regex]::Escape($EndMarker))\s*(\r?\n)?"
+    $updated = [regex]::Replace($existing, $pattern, "")
+
+    $startLinePattern = "(?m)^\s*$([regex]::Escape($StartMarker))\s*(\r?\n)?"
+    $endLinePattern = "(?m)^\s*$([regex]::Escape($EndMarker))\s*(\r?\n)?"
+    $updated = [regex]::Replace($updated, $startLinePattern, "")
+    $updated = [regex]::Replace($updated, $endLinePattern, "")
+
+    if ($updated -ne $existing) {
         Set-Content -Path $ProfilePath -Value $updated -Encoding UTF8
     }
 }
 
+function Remove-ManagedProfileBlocks {
+    param([Parameter(Mandatory = $true)][string]$ProfilePath)
+
+    if (-not (Test-Path $ProfilePath)) { return }
+    $lines = Get-Content -Path $ProfilePath -ErrorAction SilentlyContinue
+    if ($null -eq $lines) { return }
+
+    $startPattern = '^\s*#\s*>>>\s*(?:unix-tools|git-tools)-[A-Za-z0-9-]+\s*>>>\s*$'
+    $endPattern = '^\s*#\s*<<<\s*(?:unix-tools|git-tools)-[A-Za-z0-9-]+\s*<<<\s*$'
+
+    $out = New-Object System.Collections.Generic.List[string]
+    $skipDepth = 0
+    foreach ($line in $lines) {
+        if ($line -match $startPattern) {
+            $skipDepth++
+            continue
+        }
+        if ($line -match $endPattern) {
+            if ($skipDepth -gt 0) { $skipDepth-- }
+            continue
+        }
+        if ($skipDepth -eq 0) { $out.Add($line) }
+    }
+
+    $updated = $out -join "`r`n"
+    if ($updated.Length -gt 0 -and -not $updated.EndsWith("`r`n")) {
+        $updated += "`r`n"
+    }
+    Set-Content -Path $ProfilePath -Value $updated -Encoding UTF8
+}
+
 function Remove-InstalledProfileShims {
     $profilePath = $PROFILE.CurrentUserCurrentHost
+    $backup = Backup-ProfileFile -ProfilePath $profilePath
+    if ($backup) { Write-Host "[INFO] Profile backup: $backup" -ForegroundColor DarkGray }
+    Remove-ManagedProfileBlocks -ProfilePath $profilePath
     $markers = @(
         @{ Start = "# >>> unix-tools-missing-shims >>>"; End = "# <<< unix-tools-missing-shims <<<" },
         @{ Start = "# >>> unix-tools-alias-compat >>>"; End = "# <<< unix-tools-alias-compat <<<" },
@@ -320,6 +477,8 @@ function Remove-InstalledProfileShims {
 
 function Install-ProfileMissingShims {
     $profilePath = $PROFILE.CurrentUserCurrentHost
+    $backup = Backup-ProfileFile -ProfilePath $profilePath
+    if ($backup) { Write-Host "[INFO] Profile backup: $backup" -ForegroundColor DarkGray }
     $startMarker = "# >>> unix-tools-missing-shims >>>"
     $endMarker   = "# <<< unix-tools-missing-shims <<<"
     $legacyStart = "# >>> git-tools-missing-shims >>>"
@@ -389,7 +548,7 @@ Add-UnixShimIfMissing -Name "mkdirp" -Body {
 }
 
 Add-UnixShimIfMissing -Name "ll" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
     Get-ChildItem -Force @Args
 }
 
@@ -409,11 +568,11 @@ Add-UnixShimIfMissing -Name "pwd" -Body {
 }
 
 Add-UnixShimIfMissing -Name "history" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
     $items = Get-History
-    if ($Args.Count -gt 0) {
+    if ($ArgList.Count -gt 0) {
         $count = 0
-        if ([int]::TryParse($Args[0], [ref]$count) -and $count -gt 0) {
+        if ([int]::TryParse($ArgList[0], [ref]$count) -and $count -gt 0) {
             $items | Select-Object -Last $count
             return
         }
@@ -434,14 +593,14 @@ Add-UnixShimIfMissing -Name "touch" -Body {
 }
 
 Add-UnixShimIfMissing -Name "head" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
     $count = 10
     $paths = @()
     $i = 0
-    while ($i -lt $Args.Count) {
-        $a = $Args[$i]
-        if ($a -eq "-n" -and $i + 1 -lt $Args.Count) {
-            $count = [int]$Args[$i + 1]
+    while ($i -lt $ArgList.Count) {
+        $a = $ArgList[$i]
+        if ($a -eq "-n" -and $i + 1 -lt $ArgList.Count) {
+            $count = [int]$ArgList[$i + 1]
             $i += 2
             continue
         }
@@ -458,15 +617,15 @@ Add-UnixShimIfMissing -Name "head" -Body {
 }
 
 Add-UnixShimIfMissing -Name "tail" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
     $count = 10
     $follow = $false
     $paths = @()
     $i = 0
-    while ($i -lt $Args.Count) {
-        $a = $Args[$i]
-        if ($a -eq "-n" -and $i + 1 -lt $Args.Count) {
-            $count = [int]$Args[$i + 1]
+    while ($i -lt $ArgList.Count) {
+        $a = $ArgList[$i]
+        if ($a -eq "-n" -and $i + 1 -lt $ArgList.Count) {
+            $count = [int]$ArgList[$i + 1]
             $i += 2
             continue
         }
@@ -485,11 +644,11 @@ Add-UnixShimIfMissing -Name "tail" -Body {
 }
 
 Add-UnixShimIfMissing -Name "wc" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
     $linesOnly = $false
     $wordsOnly = $false
     $files = @()
-    foreach ($a in $Args) {
+    foreach ($a in $ArgList) {
         if ($a -eq "-l") { $linesOnly = $true; continue }
         if ($a -eq "-w") { $wordsOnly = $true; continue }
         if ($a.StartsWith("-")) { throw "wc: unsupported option $a (fallback supports -l, -w)" }
@@ -526,11 +685,11 @@ function Invoke-GrepShim {
         if ($a -match '^-[A-Za-z]+$') {
             foreach ($ch in $a.Substring(1).ToCharArray()) {
                 switch ($ch) {
-                    'i' { $ignoreCase = $true; continue }
-                    'n' { $lineNumber = $true; continue }
-                    'v' { $invert = $true; continue }
-                    'r' { $recursive = $true; continue }
-                    'R' { $recursive = $true; continue }
+                    'i' { $ignoreCase = $true; break }
+                    'n' { $lineNumber = $true; break }
+                    'v' { $invert = $true; break }
+                    'r' { $recursive = $true; break }
+                    'R' { $recursive = $true; break }
                     default { throw "grep: unsupported option -$ch (fallback supports -i, -n, -v, -r, -R)" }
                 }
             }
@@ -605,17 +764,17 @@ Add-UnixShimIfMissing -Name "which" -Body {
 }
 
 Add-UnixShimIfMissing -Name "man" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
-    if ($Args.Count -eq 0) { throw "usage: man <command>" }
-    Get-Help $Args[0] -Full
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    if ($ArgList.Count -eq 0) { throw "usage: man <command>" }
+    Get-Help $ArgList[0] -Full
 }
 
 Add-UnixShimIfMissing -Name "source" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
-    if ($Args.Count -eq 0) { throw "usage: source <script> [args...]" }
-    $path = $Args[0]
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    if ($ArgList.Count -eq 0) { throw "usage: source <script> [args...]" }
+    $path = $ArgList[0]
     $rest = @()
-    if ($Args.Count -gt 1) { $rest = $Args[1..($Args.Count - 1)] }
+    if ($ArgList.Count -gt 1) { $rest = $ArgList[1..($ArgList.Count - 1)] }
     . $path @rest
 }
 '@
@@ -627,6 +786,8 @@ Add-UnixShimIfMissing -Name "source" -Body {
 
 function Install-ProfileAliasCompat {
     $profilePath = $PROFILE.CurrentUserCurrentHost
+    $backup = Backup-ProfileFile -ProfilePath $profilePath
+    if ($backup) { Write-Host "[INFO] Profile backup: $backup" -ForegroundColor DarkGray }
     $startMarker = "# >>> unix-tools-alias-compat >>>"
     $endMarker   = "# <<< unix-tools-alias-compat <<<"
     $legacyStart = "# >>> git-tools-alias-compat >>>"
@@ -676,7 +837,7 @@ function Show-UnsupportedFlag {
     )
 
     $message = @(
-        "$Command: unsupported option '$Flag'",
+        "$($Command): unsupported option '$Flag'",
         "Supported flags in fallback: $SupportedFlags",
         "",
         "Tip: run Show-UnixCoverageReport -IncludeMissing to see command/flag coverage.",
@@ -712,7 +873,7 @@ $script:UnixMissingShimCoverage = [ordered]@{
     unset      = [ordered]@{ CoveredFlags = "NAME [NAME2 ...]"; UnsupportedFlags = "N/A (name list fallback)" }
     mkdirp     = [ordered]@{ CoveredFlags = "<dir ...>"; UnsupportedFlags = "N/A (compat wrapper)" }
     ll         = [ordered]@{ CoveredFlags = "[path ...]"; UnsupportedFlags = "N/A (compat wrapper)" }
-    clear-hist = [ordered]@{ CoveredFlags = "(no flags)"; UnsupportedFlags = "All flags unsupported" }
+    'clear-hist' = [ordered]@{ CoveredFlags = "(no flags)"; UnsupportedFlags = "All flags unsupported" }
     clear      = [ordered]@{ CoveredFlags = "(no flags)"; UnsupportedFlags = "All flags unsupported" }
     pwd        = [ordered]@{ CoveredFlags = "(no flags)"; UnsupportedFlags = "All flags unsupported" }
     history    = [ordered]@{ CoveredFlags = "[count]"; UnsupportedFlags = "Any flag option" }
@@ -786,9 +947,16 @@ function Get-UnixCoverageReport {
         }
     }
 
+    $commandCache = @{}
+    $uniqueNames = $catalog | Select-Object -ExpandProperty Command -Unique
+    foreach ($n in $uniqueNames) {
+        $commandCache[$n] = @(Get-Command $n -All -ErrorAction SilentlyContinue)
+    }
+
     foreach ($item in $catalog) {
         $name = $item.Command
-        $all = @(Get-Command $name -All -ErrorAction SilentlyContinue)
+        $all = @()
+        if ($commandCache.ContainsKey($name)) { $all = @($commandCache[$name]) }
         $resolution = "missing"
         $source = ""
 
@@ -858,12 +1026,12 @@ function Show-UnixCoverageReport {
 }
 
 Set-UnixCommand -Name "rm" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
     $recurse = $false
     $force = $false
     $paths = @()
     $parseOptions = $true
-    foreach ($a in $Args) {
+    foreach ($a in $ArgList) {
         if ($parseOptions -and $a -eq "--") {
             $parseOptions = $false
             continue
@@ -875,9 +1043,9 @@ Set-UnixCommand -Name "rm" -Fallback {
         if ($parseOptions -and $a -match '^-[A-Za-z]+$') {
             foreach ($ch in $a.Substring(1).ToCharArray()) {
                 switch ($ch) {
-                    'r' { $recurse = $true; continue }
-                    'R' { $recurse = $true; continue }
-                    'f' { $force = $true; continue }
+                    'r' { $recurse = $true; break }
+                    'R' { $recurse = $true; break }
+                    'f' { $force = $true; break }
                     default { Show-UnsupportedFlag -Command "rm" -Flag ("-" + $ch) -SupportedFlags "-r, -R, -f, --" -Usage "rm [-rf] [--] <path...>" }
                 }
             }
@@ -890,13 +1058,13 @@ Set-UnixCommand -Name "rm" -Fallback {
 }
 
 Set-UnixCommand -Name "cp" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
     $recurse = $false
     $force = $false
     $noClobber = $false
     $items = @()
     $parseOptions = $true
-    foreach ($a in $Args) {
+    foreach ($a in $ArgList) {
         if ($parseOptions -and $a -eq "--") {
             $parseOptions = $false
             continue
@@ -908,10 +1076,10 @@ Set-UnixCommand -Name "cp" -Fallback {
         if ($parseOptions -and $a -match '^-[A-Za-z]+$') {
             foreach ($ch in $a.Substring(1).ToCharArray()) {
                 switch ($ch) {
-                    'r' { $recurse = $true; continue }
-                    'R' { $recurse = $true; continue }
-                    'f' { $force = $true; continue }
-                    'n' { $noClobber = $true; continue }
+                    'r' { $recurse = $true; break }
+                    'R' { $recurse = $true; break }
+                    'f' { $force = $true; break }
+                    'n' { $noClobber = $true; break }
                     default { Show-UnsupportedFlag -Command "cp" -Flag ("-" + $ch) -SupportedFlags "-r, -R, -f, -n, --" -Usage "cp [-rfn] [--] <src...> <dest>" }
                 }
             }
@@ -939,12 +1107,12 @@ Set-UnixCommand -Name "cp" -Fallback {
 }
 
 Set-UnixCommand -Name "mv" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
     $force = $false
     $noClobber = $false
     $items = @()
     $parseOptions = $true
-    foreach ($a in $Args) {
+    foreach ($a in $ArgList) {
         if ($parseOptions -and $a -eq "--") {
             $parseOptions = $false
             continue
@@ -956,8 +1124,8 @@ Set-UnixCommand -Name "mv" -Fallback {
         if ($parseOptions -and $a -match '^-[A-Za-z]+$') {
             foreach ($ch in $a.Substring(1).ToCharArray()) {
                 switch ($ch) {
-                    'f' { $force = $true; continue }
-                    'n' { $noClobber = $true; continue }
+                    'f' { $force = $true; break }
+                    'n' { $noClobber = $true; break }
                     default { Show-UnsupportedFlag -Command "mv" -Flag ("-" + $ch) -SupportedFlags "-f, -n, --" -Usage "mv [-fn] [--] <src...> <dest>" }
                 }
             }
@@ -984,12 +1152,12 @@ Set-UnixCommand -Name "mv" -Fallback {
 }
 
 Set-UnixCommand -Name "mkdir" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
     $p = $false
     $verbose = $false
     $paths = @()
     $parseOptions = $true
-    foreach ($a in $Args) {
+    foreach ($a in $ArgList) {
         if ($parseOptions -and $a -eq "--") {
             $parseOptions = $false
             continue
@@ -1001,8 +1169,8 @@ Set-UnixCommand -Name "mkdir" -Fallback {
         if ($parseOptions -and $a -match '^-[A-Za-z]+$') {
             foreach ($ch in $a.Substring(1).ToCharArray()) {
                 switch ($ch) {
-                    'p' { $p = $true; continue }
-                    'v' { $verbose = $true; continue }
+                    'p' { $p = $true; break }
+                    'v' { $verbose = $true; break }
                     default { Show-UnsupportedFlag -Command "mkdir" -Flag ("-" + $ch) -SupportedFlags "-p, -v, --" -Usage "mkdir [-pv] [--] <dir...>" }
                 }
             }
@@ -1018,14 +1186,14 @@ Set-UnixCommand -Name "mkdir" -Fallback {
 }
 
 Set-UnixCommand -Name "ls" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
     $all = $false
     $long = $false
     $sortTime = $false
     $reverse = $false
     $paths = @()
     $parseOptions = $true
-    foreach ($a in $Args) {
+    foreach ($a in $ArgList) {
         if ($parseOptions -and $a -eq "--") {
             $parseOptions = $false
             continue
@@ -1037,11 +1205,11 @@ Set-UnixCommand -Name "ls" -Fallback {
         if ($parseOptions -and $a -match '^-[A-Za-z]+$') {
             foreach ($ch in $a.Substring(1).ToCharArray()) {
                 switch ($ch) {
-                    'a' { $all = $true; continue }
-                    'l' { $long = $true; continue }
-                    't' { $sortTime = $true; continue }
-                    'r' { $reverse = $true; continue }
-                    'h' { continue }
+                    'a' { $all = $true; break }
+                    'l' { $long = $true; break }
+                    't' { $sortTime = $true; break }
+                    'r' { $reverse = $true; break }
+                    'h' { break }
                     default { Show-UnsupportedFlag -Command "ls" -Flag ("-" + $ch) -SupportedFlags "-a, -l, -t, -r, -h, --" -Usage "ls [-lathr] [--] [path...]" }
                 }
             }
@@ -1058,7 +1226,23 @@ Set-UnixCommand -Name "ls" -Fallback {
         $items = $arr
     }
     if ($long) {
-        $items | Format-Table Mode, LastWriteTime, @{N='Length';E={ if ($_.PSIsContainer) { '' } else { $_.Length } }}, Name -AutoSize
+        $rows = $items | ForEach-Object {
+            $displayName = $_.Name
+            $target = $null
+            if (($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                if ($_.PSObject.Properties.Match('LinkTarget').Count -gt 0) { $target = $_.LinkTarget }
+                if (-not $target -and $_.PSObject.Properties.Match('Target').Count -gt 0) { $target = $_.Target }
+                if ($target -is [array]) { $target = $target -join ", " }
+                if ($target) { $displayName = "$displayName -> $target" }
+            }
+            [pscustomobject]@{
+                Mode = $_.Mode
+                LastWriteTime = $_.LastWriteTime
+                Length = if ($_.PSIsContainer) { '' } else { $_.Length }
+                Name = $displayName
+            }
+        }
+        $rows | Format-Table Mode, LastWriteTime, Length, Name -AutoSize
     } else {
         $items
     }
@@ -1082,8 +1266,8 @@ Set-UnixCommand -Name "cat" -Fallback {
         if ($parseOptions -and $a -match '^-[A-Za-z]+$') {
             foreach ($ch in $a.Substring(1).ToCharArray()) {
                 switch ($ch) {
-                    'n' { $number = $true; continue }
-                    's' { $squeezeBlank = $true; continue }
+                    'n' { $number = $true; break }
+                    's' { $squeezeBlank = $true; break }
                     default { Show-UnsupportedFlag -Command "cat" -Flag ("-" + $ch) -SupportedFlags "-n, -s, --" -Usage "cat [-ns] [--] [file...]" }
                 }
             }
@@ -1113,14 +1297,14 @@ Set-UnixCommand -Name "cat" -Fallback {
 }
 
 Set-UnixCommand -Name "sort" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
     $unique = $false
     $descending = $false
     $numeric = $false
     $ignoreCase = $false
     $paths = @()
     $parseOptions = $true
-    foreach ($a in $Args) {
+    foreach ($a in $ArgList) {
         if ($parseOptions -and $a -eq "--") {
             $parseOptions = $false
             continue
@@ -1132,10 +1316,10 @@ Set-UnixCommand -Name "sort" -Fallback {
         if ($parseOptions -and $a -match '^-[A-Za-z]+$') {
             foreach ($ch in $a.Substring(1).ToCharArray()) {
                 switch ($ch) {
-                    'u' { $unique = $true; continue }
-                    'r' { $descending = $true; continue }
-                    'n' { $numeric = $true; continue }
-                    'f' { $ignoreCase = $true; continue }
+                    'u' { $unique = $true; break }
+                    'r' { $descending = $true; break }
+                    'n' { $numeric = $true; break }
+                    'f' { $ignoreCase = $true; break }
                     default { Show-UnsupportedFlag -Command "sort" -Flag ("-" + $ch) -SupportedFlags "-u, -r, -n, -f, --" -Usage "sort [-urnf] [--] [file...]" }
                 }
             }
@@ -1159,11 +1343,11 @@ Set-UnixCommand -Name "sort" -Fallback {
 }
 
 Set-UnixCommand -Name "diff" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
     $files = @()
     $brief = $false
     $parseOptions = $true
-    foreach ($a in $Args) {
+    foreach ($a in $ArgList) {
         if ($parseOptions -and $a -eq "--") {
             $parseOptions = $false
             continue
@@ -1175,8 +1359,8 @@ Set-UnixCommand -Name "diff" -Fallback {
         if ($parseOptions -and $a -match '^-[A-Za-z]+$') {
             foreach ($ch in $a.Substring(1).ToCharArray()) {
                 switch ($ch) {
-                    'u' { continue }
-                    'q' { $brief = $true; continue }
+                    'u' { break }
+                    'q' { $brief = $true; break }
                     default { Show-UnsupportedFlag -Command "diff" -Flag ("-" + $ch) -SupportedFlags "-u, -q, --" -Usage "diff [-uq] [--] <file1> <file2>" }
                 }
             }
@@ -1194,12 +1378,12 @@ Set-UnixCommand -Name "diff" -Fallback {
 }
 
 Set-UnixCommand -Name "tee" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
     $append = $false
     $ignoreInterrupt = $false
     $files = @()
     $parseOptions = $true
-    foreach ($a in $Args) {
+    foreach ($a in $ArgList) {
         if ($parseOptions -and $a -eq "--") {
             $parseOptions = $false
             continue
@@ -1211,8 +1395,8 @@ Set-UnixCommand -Name "tee" -Fallback {
         if ($parseOptions -and $a -match '^-[A-Za-z]+$') {
             foreach ($ch in $a.Substring(1).ToCharArray()) {
                 switch ($ch) {
-                    'a' { $append = $true; continue }
-                    'i' { $ignoreInterrupt = $true; continue }
+                    'a' { $append = $true; break }
+                    'i' { $ignoreInterrupt = $true; break }
                     default { Show-UnsupportedFlag -Command "tee" -Flag ("-" + $ch) -SupportedFlags "-a, -i, --" -Usage "tee [-ai] [--] <file...>" }
                 }
             }
@@ -1231,13 +1415,13 @@ Set-UnixCommand -Name "tee" -Fallback {
 }
 
 Set-UnixCommand -Name "sleep" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
-    if ($Args.Count -eq 0) { throw "usage: sleep <seconds>" }
-    if ($Args[0].StartsWith("-")) {
-        Show-UnsupportedFlag -Command "sleep" -Flag $Args[0] -SupportedFlags "NUMBER[s|m|h|d]" -Usage "sleep <seconds>|<number>[s|m|h|d]"
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    if ($ArgList.Count -eq 0) { throw "usage: sleep <seconds>" }
+    if ($ArgList[0].StartsWith("-")) {
+        Show-UnsupportedFlag -Command "sleep" -Flag $ArgList[0] -SupportedFlags "NUMBER[s|m|h|d]" -Usage "sleep <seconds>|<number>[s|m|h|d]"
         return
     }
-    $spec = $Args[0]
+    $spec = $ArgList[0]
     $m = [regex]::Match($spec, '^\s*(?<n>\d+(?:\.\d+)?)(?<u>[smhd]?)\s*$')
     if (-not $m.Success) {
         Show-UnsupportedFlag -Command "sleep" -Flag $spec -SupportedFlags "NUMBER[s|m|h|d]" -Usage "sleep <seconds>|<number>[s|m|h|d]"
@@ -1261,7 +1445,15 @@ Set-UnixCommand -Name "sleep" -Fallback {
 
 # ======================== Main Script ========================
 
-Write-Host "`n=== Unix Tools System-Wide Enabler ===" -ForegroundColor Magenta
+# ---- Help (works without elevation) ----
+if ($Help) {
+    Get-Help $MyInvocation.MyCommand.Path -Detailed
+    return
+}
+
+$transcriptStarted = Start-ScriptTranscript -Path $LogPath
+try {
+Write-Host "`n=== Unix Tools System-Wide Enabler v$ScriptVersion ===" -ForegroundColor Magenta
 Write-Host "Adds Unix-compatible tools to the system PATH`n" -ForegroundColor Cyan
 
 Assert-Admin
@@ -1307,7 +1499,7 @@ if ($Uninstall) {
 
     foreach ($sd in $candidateShimDirs) {
         if ($PSCmdlet.ShouldProcess("Machine PATH", "Remove shim directory entry $sd")) {
-            if (Remove-FromMachinePath -pathsToRemove @($sd)) {
+            if (Remove-MachinePathEntries -pathsToRemove @($sd)) {
                 $didChange = $true
                 Write-Host "[OK] Removed from Machine PATH: $sd" -ForegroundColor Green
             }
@@ -1352,7 +1544,7 @@ if ($AddGitCmd) {
 
 $changed = $false
 if ($PSCmdlet.ShouldProcess("Machine PATH", "Add tool directories")) {
-    $changed = Append-ToMachinePath $pathsToAdd
+    $changed = Add-MachinePathEntries $pathsToAdd
 }
 
 if ($changed) {
@@ -1364,7 +1556,7 @@ if ($changed) {
 
 if ($NormalizePath) {
     if ($PSCmdlet.ShouldProcess("Machine PATH", "Normalize PATH entries")) {
-        Normalize-MachinePath
+        Update-MachinePathEntries
         $didChange = $true
         Write-Host "[OK] Normalized Machine PATH (removed duplicates/trailing slashes)" -ForegroundColor Green
     }
@@ -1377,7 +1569,7 @@ if ($CreateShims) {
     Write-Host "Shim location: $shimDir" -ForegroundColor Cyan
 
     if ($PSCmdlet.ShouldProcess($shimDir, "Create/refresh shim .cmd files and prepend shim dir to Machine PATH")) {
-        Ensure-Dir $shimDir
+        New-DirectoryIfMissing $shimDir
 
         # Clear stale shims (avoid dead shims after Git upgrades)
         Get-ChildItem $shimDir -Filter *.cmd -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
@@ -1436,6 +1628,7 @@ if ($CreateShims) {
 
         $searchDirs = @($gitUsrBin)
         if ($AddMingw -and (Test-Path $gitMingwBin)) { $searchDirs += $gitMingwBin }
+        $appIndex = Get-ApplicationCommandIndex -excludeDir $shimDir
 
         $shimmed = 0
         $notFound = 0
@@ -1445,7 +1638,7 @@ if ($CreateShims) {
         foreach ($tool in $toolsToShim) {
             $toolPath = Find-Tool -toolName $tool -searchDirs $searchDirs
             if (-not $toolPath) {
-                $toolPath = Find-ToolInPath -toolName $tool -excludeDir $shimDir
+                $toolPath = Find-ToolInPath -toolName $tool -excludeDir $shimDir -AppIndex $appIndex
             }
             if ($toolPath) {
                 if (Write-ShimCmd -shimDir $shimDir -name $tool -targetExePath $toolPath) { $shimmed++ }
@@ -1456,7 +1649,7 @@ if ($CreateShims) {
 
         # Shim optional third-party tools if installed
         foreach ($tool in $externalTools) {
-            $toolPath = Find-ToolInPath -toolName $tool -excludeDir $shimDir
+            $toolPath = Find-ToolInPath -toolName $tool -excludeDir $shimDir -AppIndex $appIndex
             if ($toolPath) {
                 if (Write-ShimCmd -shimDir $shimDir -name $tool -targetExePath $toolPath) {
                     $shimmed++
@@ -1467,7 +1660,7 @@ if ($CreateShims) {
             }
         }
 
-        Prepend-ToMachinePath $shimDir
+        Add-MachinePathPrepend $shimDir
         $didChange = $true
         Write-Host "[OK] Created $shimmed shims in $shimDir (stale shims cleared first)" -ForegroundColor Green
         Write-Host "[OK] Shim directory prepended to Machine PATH (takes priority)" -ForegroundColor Green
@@ -1512,8 +1705,13 @@ Write-Host "`n=== Step 4: Verification ===" -ForegroundColor Yellow
 Refresh-SessionPath
 
 $verifyTools = @("grep","sed","awk","find","bash")
+$verifyCommandCache = @{}
 foreach ($tool in $verifyTools) {
-    $cmds = Get-Command $tool -All -ErrorAction SilentlyContinue
+    $verifyCommandCache[$tool] = @(Get-Command $tool -All -ErrorAction SilentlyContinue)
+}
+
+foreach ($tool in $verifyTools) {
+    $cmds = @($verifyCommandCache[$tool])
     if (-not $cmds) {
         Write-Host "  [FAIL] $tool (not found in this session; open a NEW terminal)" -ForegroundColor Red
         continue
@@ -1590,4 +1788,10 @@ if ($InstallProfileShims) {
 }
 
 Write-Host "`nDone!`n" -ForegroundColor Green
+
+} finally {
+    if ($transcriptStarted) {
+        Stop-ScriptTranscript
+    }
+}
 
