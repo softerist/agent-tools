@@ -593,41 +593,64 @@ function Show-UnsupportedFlag {
 }
 
 $script:UnixFallbackCoverage = [ordered]@{
-    rm    = "-r, -R, -f, --"
-    cp    = "-r, -R, -f, -n, --"
-    mv    = "-f, -n, --"
-    mkdir = "-p, -v, --"
-    ls    = "-a, -l, -t, -r, -h, --"
-    cat   = "-n, -s, --"
-    sort  = "-u, -r, -n, -f, --"
-    diff  = "-u, -q, --"
-    tee   = "-a, -i, --"
-    sleep = "NUMBER[s|m|h|d]"
+    rm    = [ordered]@{ CoveredFlags = "-r, -R, -f, --"; UnsupportedFlags = "Any other short/long option" }
+    cp    = [ordered]@{ CoveredFlags = "-r, -R, -f, -n, --"; UnsupportedFlags = "Any other short/long option" }
+    mv    = [ordered]@{ CoveredFlags = "-f, -n, --"; UnsupportedFlags = "Any other short/long option" }
+    mkdir = [ordered]@{ CoveredFlags = "-p, -v, --"; UnsupportedFlags = "Any other short/long option" }
+    ls    = [ordered]@{ CoveredFlags = "-a, -l, -t, -r, -h, --"; UnsupportedFlags = "Any other short/long option" }
+    cat   = [ordered]@{ CoveredFlags = "-n, -s, --"; UnsupportedFlags = "Any other short/long option" }
+    sort  = [ordered]@{ CoveredFlags = "-u, -r, -n, -f, --"; UnsupportedFlags = "Any other short/long option" }
+    diff  = [ordered]@{ CoveredFlags = "-u, -q, --"; UnsupportedFlags = "Any other short/long option" }
+    tee   = [ordered]@{ CoveredFlags = "-a, -i, --"; UnsupportedFlags = "Any other short/long option" }
+    sleep = [ordered]@{ CoveredFlags = "NUMBER[s|m|h|d]"; UnsupportedFlags = "Invalid value or unsupported suffix" }
 }
 
 $script:UnixMissingShimCoverage = [ordered]@{
-    export     = "NAME=VALUE [NAME2=VALUE2 ...]"
-    rev        = "[file ...] or stdin"
-    unset      = "NAME [NAME2 ...]"
-    mkdirp     = "<dir ...>"
-    ll         = "[path ...]"
-    clear-hist = "(no flags)"
-    clear      = "(no flags)"
-    pwd        = "(no flags)"
-    history    = "[count]"
-    grep       = "-i, -n, -v, -r, -R"
-    egrep      = "-i, -n, -v, -r, -R"
-    fgrep      = "-i, -n, -v, -r, -R"
-    which      = "<command ...>"
-    man        = "<command>"
-    source     = "<script> [args...]"
+    export     = [ordered]@{ CoveredFlags = "NAME=VALUE [NAME2=VALUE2 ...]"; UnsupportedFlags = "N/A (assignment syntax fallback)" }
+    rev        = [ordered]@{ CoveredFlags = "[file ...] or stdin"; UnsupportedFlags = "N/A (line reverse fallback)" }
+    unset      = [ordered]@{ CoveredFlags = "NAME [NAME2 ...]"; UnsupportedFlags = "N/A (name list fallback)" }
+    mkdirp     = [ordered]@{ CoveredFlags = "<dir ...>"; UnsupportedFlags = "N/A (compat wrapper)" }
+    ll         = [ordered]@{ CoveredFlags = "[path ...]"; UnsupportedFlags = "N/A (compat wrapper)" }
+    clear-hist = [ordered]@{ CoveredFlags = "(no flags)"; UnsupportedFlags = "All flags unsupported" }
+    clear      = [ordered]@{ CoveredFlags = "(no flags)"; UnsupportedFlags = "All flags unsupported" }
+    pwd        = [ordered]@{ CoveredFlags = "(no flags)"; UnsupportedFlags = "All flags unsupported" }
+    history    = [ordered]@{ CoveredFlags = "[count]"; UnsupportedFlags = "Any flag option" }
+    grep       = [ordered]@{ CoveredFlags = "-i, -n, -v, -r, -R"; UnsupportedFlags = "Any other short/long option" }
+    egrep      = [ordered]@{ CoveredFlags = "-i, -n, -v, -r, -R"; UnsupportedFlags = "Any other short/long option" }
+    fgrep      = [ordered]@{ CoveredFlags = "-i, -n, -v, -r, -R"; UnsupportedFlags = "Any other short/long option" }
+    which      = [ordered]@{ CoveredFlags = "<command ...>"; UnsupportedFlags = "Any flag option" }
+    man        = [ordered]@{ CoveredFlags = "<command>"; UnsupportedFlags = "Any flag option" }
+    source     = [ordered]@{ CoveredFlags = "<script> [args...]"; UnsupportedFlags = "Any flag option" }
+}
+
+function Convert-UnixCoverageEntry {
+    param([Parameter(Mandatory = $true)]$Entry)
+
+    if ($Entry -is [string]) {
+        return [pscustomobject]@{
+            CoveredFlags = $Entry
+            UnsupportedFlags = "Any unsupported option gets friendly guidance"
+        }
+    }
+
+    $covered = ""
+    $unsupported = "Any unsupported option gets friendly guidance"
+    if ($Entry.PSObject.Properties['CoveredFlags']) { $covered = [string]$Entry.CoveredFlags }
+    if ($Entry.PSObject.Properties['UnsupportedFlags']) { $unsupported = [string]$Entry.UnsupportedFlags }
+
+    [pscustomobject]@{
+        CoveredFlags = $covered
+        UnsupportedFlags = $unsupported
+    }
 }
 
 function Get-UnixFallbackCoverage {
     $script:UnixFallbackCoverage.GetEnumerator() | ForEach-Object {
+        $normalized = Convert-UnixCoverageEntry -Entry $_.Value
         [pscustomobject]@{
             Command = $_.Key
-            Flags   = $_.Value
+            CoveredFlags = $normalized.CoveredFlags
+            UnsupportedFlags = $normalized.UnsupportedFlags
         }
     }
 }
@@ -637,19 +660,23 @@ function Get-UnixCoverageReport {
 
     $catalog = New-Object System.Collections.Generic.List[object]
     foreach ($e in $script:UnixFallbackCoverage.GetEnumerator()) {
+        $normalized = Convert-UnixCoverageEntry -Entry $e.Value
         $catalog.Add([pscustomobject]@{
             Command = $e.Key
             Group = "alias-compat"
-            SupportedFlags = $e.Value
+            CoveredFlags = $normalized.CoveredFlags
+            UnsupportedFlags = $normalized.UnsupportedFlags
         }) | Out-Null
     }
 
     if ($IncludeMissing) {
         foreach ($e in $script:UnixMissingShimCoverage.GetEnumerator()) {
+            $normalized = Convert-UnixCoverageEntry -Entry $e.Value
             $catalog.Add([pscustomobject]@{
                 Command = $e.Key
                 Group = "missing-shim"
-                SupportedFlags = $e.Value
+                CoveredFlags = $normalized.CoveredFlags
+                UnsupportedFlags = $normalized.UnsupportedFlags
             }) | Out-Null
         }
     }
@@ -685,7 +712,20 @@ function Get-UnixCoverageReport {
             }
         }
 
-        $unsupported = switch ($resolution) {
+        $passThroughFlags = switch ($resolution) {
+            "pass-through" { "All executable flags pass through" }
+            "alias" { "Alias target decides" }
+            default { "-" }
+        }
+
+        $effectiveUnsupportedFlags = switch ($resolution) {
+            "pass-through" { "-" }
+            "alias" { "Depends on alias target implementation" }
+            "fallback" { $item.UnsupportedFlags }
+            default { "Command not currently available" }
+        }
+
+        $unsupportedBehavior = switch ($resolution) {
             "pass-through" { "Delegated to executable behavior" }
             "fallback" { "Friendly message + add-support guidance" }
             "alias" { "Depends on alias target implementation" }
@@ -696,8 +736,10 @@ function Get-UnixCoverageReport {
             Command = $name
             Group = $item.Group
             Resolution = $resolution
-            SupportedFlags = $item.SupportedFlags
-            UnsupportedBehavior = $unsupported
+            CoveredFlags = $item.CoveredFlags
+            PassThroughFlags = $passThroughFlags
+            UnsupportedFlags = $effectiveUnsupportedFlags
+            UnsupportedBehavior = $unsupportedBehavior
             Source = $source
         }
     }
@@ -707,7 +749,7 @@ function Show-UnixCoverageReport {
     param([switch]$IncludeMissing)
     Get-UnixCoverageReport -IncludeMissing:$IncludeMissing |
         Sort-Object Group, Command |
-        Format-Table Command, Group, Resolution, SupportedFlags, UnsupportedBehavior -AutoSize
+        Format-Table Command, Group, Resolution, CoveredFlags, PassThroughFlags, UnsupportedFlags -AutoSize
 }
 
 Set-UnixCommand -Name "rm" -Fallback {
