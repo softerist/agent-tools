@@ -578,7 +578,7 @@ function Show-UnsupportedFlag {
         "$Command: unsupported option '$Flag'",
         "Supported flags in fallback: $SupportedFlags",
         "",
-        "Tip: run Get-UnixFallbackCoverage to see current fallback flag coverage.",
+        "Tip: run Show-UnixCoverageReport -IncludeMissing to see command/flag coverage.",
         "",
         "How to add support for this flag:",
         "1) Open `$PROFILE and find marker: # >>> unix-tools-alias-compat >>>",
@@ -605,6 +605,24 @@ $script:UnixFallbackCoverage = [ordered]@{
     sleep = "NUMBER[s|m|h|d]"
 }
 
+$script:UnixMissingShimCoverage = [ordered]@{
+    export     = "NAME=VALUE [NAME2=VALUE2 ...]"
+    rev        = "[file ...] or stdin"
+    unset      = "NAME [NAME2 ...]"
+    mkdirp     = "<dir ...>"
+    ll         = "[path ...]"
+    clear-hist = "(no flags)"
+    clear      = "(no flags)"
+    pwd        = "(no flags)"
+    history    = "[count]"
+    grep       = "-i, -n, -v, -r, -R"
+    egrep      = "-i, -n, -v, -r, -R"
+    fgrep      = "-i, -n, -v, -r, -R"
+    which      = "<command ...>"
+    man        = "<command>"
+    source     = "<script> [args...]"
+}
+
 function Get-UnixFallbackCoverage {
     $script:UnixFallbackCoverage.GetEnumerator() | ForEach-Object {
         [pscustomobject]@{
@@ -612,6 +630,84 @@ function Get-UnixFallbackCoverage {
             Flags   = $_.Value
         }
     }
+}
+
+function Get-UnixCoverageReport {
+    param([switch]$IncludeMissing)
+
+    $catalog = New-Object System.Collections.Generic.List[object]
+    foreach ($e in $script:UnixFallbackCoverage.GetEnumerator()) {
+        $catalog.Add([pscustomobject]@{
+            Command = $e.Key
+            Group = "alias-compat"
+            SupportedFlags = $e.Value
+        }) | Out-Null
+    }
+
+    if ($IncludeMissing) {
+        foreach ($e in $script:UnixMissingShimCoverage.GetEnumerator()) {
+            $catalog.Add([pscustomobject]@{
+                Command = $e.Key
+                Group = "missing-shim"
+                SupportedFlags = $e.Value
+            }) | Out-Null
+        }
+    }
+
+    foreach ($item in $catalog) {
+        $name = $item.Command
+        $all = @(Get-Command $name -All -ErrorAction SilentlyContinue)
+        $resolution = "missing"
+        $source = ""
+
+        if ($all.Count -gt 0) {
+            $app = $all | Where-Object { $_.CommandType -eq "Application" } | Select-Object -First 1
+            if ($app) {
+                $resolution = "pass-through"
+                $source = $app.Source
+            } else {
+                $fn = $all | Where-Object { $_.CommandType -eq "Function" } | Select-Object -First 1
+                if ($fn) {
+                    $resolution = "fallback"
+                    $source = "Function:$($fn.Name)"
+                } else {
+                    $alias = $all | Where-Object { $_.CommandType -eq "Alias" } | Select-Object -First 1
+                    if ($alias) {
+                        $resolution = "alias"
+                        $source = "Alias->$($alias.Definition)"
+                    } else {
+                        $first = $all | Select-Object -First 1
+                        $resolution = $first.CommandType.ToString().ToLowerInvariant()
+                        if ($first.Source) { $source = $first.Source }
+                        elseif ($first.Definition) { $source = $first.Definition }
+                    }
+                }
+            }
+        }
+
+        $unsupported = switch ($resolution) {
+            "pass-through" { "Delegated to executable behavior" }
+            "fallback" { "Friendly message + add-support guidance" }
+            "alias" { "Depends on alias target implementation" }
+            default { "Command not currently available" }
+        }
+
+        [pscustomobject]@{
+            Command = $name
+            Group = $item.Group
+            Resolution = $resolution
+            SupportedFlags = $item.SupportedFlags
+            UnsupportedBehavior = $unsupported
+            Source = $source
+        }
+    }
+}
+
+function Show-UnixCoverageReport {
+    param([switch]$IncludeMissing)
+    Get-UnixCoverageReport -IncludeMissing:$IncludeMissing |
+        Sort-Object Group, Command |
+        Format-Table Command, Group, Resolution, SupportedFlags, UnsupportedBehavior -AutoSize
 }
 
 Set-UnixCommand -Name "rm" -Fallback {
@@ -1197,6 +1293,7 @@ if ($InstallProfileShims) {
     Write-Host "• Missing-command profile shims installed for: export, rev, unset, mkdirp, ll, clear-hist, clear, pwd, history, grep, egrep, fgrep, which, man, source" -ForegroundColor Cyan
     Write-Host "• Alias-compat wrappers installed for common commands: rm, cp, mv, mkdir, ls, cat, sort, diff, tee, sleep" -ForegroundColor Cyan
     Write-Host "• Profile shims are idempotent and stored in marker blocks under your profile" -ForegroundColor Cyan
+    Write-Host "• Coverage report command: Show-UnixCoverageReport -IncludeMissing" -ForegroundColor Cyan
 }
 
 Write-Host "`n=== Next Steps ===" -ForegroundColor Yellow
@@ -1211,6 +1308,7 @@ if ($InstallProfileShims) {
     Write-Host "   'stressed' | rev" -ForegroundColor Cyan
     Write-Host "   rm -rf .\tmp" -ForegroundColor Cyan
     Write-Host "   ls -la" -ForegroundColor Cyan
+    Write-Host "   Show-UnixCoverageReport -IncludeMissing" -ForegroundColor Cyan
 }
 
 Write-Host "`nDone! 🎉`n" -ForegroundColor Green
