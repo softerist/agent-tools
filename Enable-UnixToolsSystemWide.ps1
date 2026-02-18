@@ -715,15 +715,20 @@ function Upsert-ProfileBlock {
         ""
     ) -join "`r`n"
 
-    $pattern = "(?s)$([regex]::Escape($StartMarker)).*?$([regex]::Escape($EndMarker))\r?\n?"
-    if ([regex]::IsMatch($existing, $pattern)) {
-        $updated = [regex]::Replace($existing, $pattern, $newBlock, 1)
-    } else {
-        if ($existing.Length -gt 0 -and -not $existing.EndsWith("`r`n")) {
-            $existing += "`r`n"
-        }
-        $updated = $existing + $newBlock
+    # Normalize by removing any existing complete or orphaned marker lines first,
+    # then append exactly one canonical block.
+    $blockPattern = "(?ms)^\s*$([regex]::Escape($StartMarker))\s*$.*?^\s*$([regex]::Escape($EndMarker))\s*(\r?\n)?"
+    $startLinePattern = "(?m)^\s*$([regex]::Escape($StartMarker))\s*(\r?\n)?"
+    $endLinePattern = "(?m)^\s*$([regex]::Escape($EndMarker))\s*(\r?\n)?"
+
+    $updated = [regex]::Replace($existing, $blockPattern, "")
+    $updated = [regex]::Replace($updated, $startLinePattern, "")
+    $updated = [regex]::Replace($updated, $endLinePattern, "")
+
+    if ($updated.Length -gt 0 -and -not $updated.EndsWith("`r`n")) {
+        $updated += "`r`n"
     }
+    $updated += $newBlock
 
     Set-Content -Path $ProfilePath -Value $updated -Encoding UTF8
 }
@@ -1113,6 +1118,281 @@ Add-UnixShimIfMissing -Name "source" -Body {
     if ($ArgList.Count -gt 1) { $rest = $ArgList[1..($ArgList.Count - 1)] }
     . $path @rest
 }
+
+Add-UnixShimIfMissing -Name "apropos" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    if ($ArgList.Count -eq 0) { throw "usage: apropos <keyword>" }
+    $pattern = "*" + (($ArgList -join " ").Trim()) + "*"
+    Get-Help $pattern -ErrorAction SilentlyContinue |
+        Select-Object Name, Synopsis |
+        Sort-Object Name
+}
+
+Add-UnixShimIfMissing -Name "make" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $alt = @("mingw32-make", "nmake")
+    foreach ($name in $alt) {
+        $cmd = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($cmd) {
+            & $cmd.Source @ArgList
+            return
+        }
+    }
+    throw "make: command not found. Install make or run with -AddMingw so mingw32-make can be discovered."
+}
+
+Add-UnixShimIfMissing -Name "open" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    if ($ArgList.Count -eq 0) {
+        Start-Process -FilePath "."
+        return
+    }
+    foreach ($target in $ArgList) {
+        Start-Process -FilePath $target
+    }
+}
+
+Add-UnixShimIfMissing -Name "xdg-open" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    open @ArgList
+}
+
+Add-UnixShimIfMissing -Name "rename" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    if ($ArgList.Count -ne 2) { throw "usage: rename <old-path> <new-name|new-path>" }
+    $oldPath = $ArgList[0]
+    $newSpec = $ArgList[1]
+    if ($newSpec -match '[\\/]' -or [System.IO.Path]::IsPathRooted($newSpec)) {
+        Move-Item -Path $oldPath -Destination $newSpec -Force
+    } else {
+        Rename-Item -Path $oldPath -NewName $newSpec -Force
+    }
+}
+
+Add-UnixShimIfMissing -Name "dos2unix" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    if ($ArgList.Count -eq 0) { throw "usage: dos2unix <file...>" }
+    foreach ($path in $ArgList) {
+        $text = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
+        $out = ($text -replace "`r`n", "`n") -replace "`r", "`n"
+        Set-Content -LiteralPath $path -Value $out -NoNewline -Encoding utf8NoBOM
+    }
+}
+
+Add-UnixShimIfMissing -Name "unix2dos" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    if ($ArgList.Count -eq 0) { throw "usage: unix2dos <file...>" }
+    foreach ($path in $ArgList) {
+        $text = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
+        $normalized = ($text -replace "`r`n", "`n") -replace "`r", "`n"
+        $out = $normalized -replace "`n", "`r`n"
+        Set-Content -LiteralPath $path -Value $out -NoNewline -Encoding utf8NoBOM
+    }
+}
+
+Add-UnixShimIfMissing -Name "vdir" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    Get-ChildItem -Force @ArgList | Format-Table Mode, LastWriteTime, Length, Name -AutoSize
+}
+
+Add-UnixShimIfMissing -Name "link" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    if ($ArgList.Count -ne 2) { throw "usage: link <target> <linkpath>" }
+    New-Item -ItemType HardLink -Path $ArgList[1] -Target $ArgList[0] -Force | Out-Null
+}
+
+Add-UnixShimIfMissing -Name "tput" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    if ($ArgList.Count -eq 0) { throw "usage: tput <clear|reset|cols|lines>" }
+    switch ($ArgList[0]) {
+        "clear" { Clear-Host; return }
+        "reset" { Clear-Host; return }
+        "cols" { [Console]::WindowWidth; return }
+        "lines" { [Console]::WindowHeight; return }
+        default { throw "tput: fallback supports clear, reset, cols, lines" }
+    }
+}
+
+Add-UnixShimIfMissing -Name "sync" -Body {
+    [GC]::Collect()
+}
+
+Add-UnixShimIfMissing -Name "at" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    if ($ArgList.Count -lt 2) { throw "usage: at HH:mm <command...>" }
+    $time = $ArgList[0]
+    if ($time -notmatch '^\d{1,2}:\d{2}$') { throw "at: time format must be HH:mm" }
+    $commandText = ($ArgList[1..($ArgList.Count - 1)] -join " ")
+    $taskName = "unix-at-" + ([guid]::NewGuid().ToString("N").Substring(0, 8))
+    & schtasks /Create /SC ONCE /TN $taskName /TR $commandText /ST $time /F | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "at: failed to create scheduled task." }
+    Write-Output $taskName
+}
+
+Add-UnixShimIfMissing -Name "aspell" -Body {
+    throw "aspell: fallback unavailable. Install aspell and re-run setup to get executable pass-through."
+}
+
+Add-UnixShimIfMissing -Name "bc" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $expr = if ($ArgList.Count -gt 0) { $ArgList -join " " } else { ($input | Out-String).Trim() }
+    if ([string]::IsNullOrWhiteSpace($expr)) { throw "usage: bc <expression>" }
+    $table = New-Object System.Data.DataTable
+    $result = $table.Compute($expr, $null)
+    Write-Output $result
+}
+
+Add-UnixShimIfMissing -Name "base64" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $decode = $false
+    $wrap = 76
+    $files = @()
+    $i = 0
+    while ($i -lt $ArgList.Count) {
+        $a = $ArgList[$i]
+        if ($a -eq "--") { $i++; continue }
+        if ($a -eq "-d" -or $a -eq "--decode") { $decode = $true; $i++; continue }
+        if ($a -eq "-w" -and $i + 1 -lt $ArgList.Count) { $wrap = [int]$ArgList[$i + 1]; $i += 2; continue }
+        if ($a.StartsWith("-")) { throw "base64: unsupported option $a (fallback supports -d/--decode, -w N)" }
+        $files += $a
+        $i++
+    }
+
+    if ($decode) {
+        $encoded = if ($files.Count -gt 0) {
+            Get-Content -LiteralPath $files[0] -Raw -ErrorAction Stop
+        } else {
+            (@($input) -join "`n")
+        }
+        $clean = ($encoded -replace '\s+', '')
+        if ([string]::IsNullOrWhiteSpace($clean)) { return }
+        [byte[]]$decodedBytes = [Convert]::FromBase64String($clean)
+        $stdout = [Console]::OpenStandardOutput()
+        $stdout.Write($decodedBytes, 0, $decodedBytes.Length)
+        return
+    }
+
+    [byte[]]$bytes = if ($files.Count -gt 0) {
+        [System.IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $files[0]).Path)
+    } else {
+        [System.Text.Encoding]::UTF8.GetBytes((@($input) -join "`n"))
+    }
+
+    $encodedOut = [Convert]::ToBase64String($bytes)
+    if ($wrap -gt 0) {
+        for ($pos = 0; $pos -lt $encodedOut.Length; $pos += $wrap) {
+            $len = [Math]::Min($wrap, $encodedOut.Length - $pos)
+            $encodedOut.Substring($pos, $len)
+        }
+    } else {
+        $encodedOut
+    }
+}
+
+Add-UnixShimIfMissing -Name "base32" -Body {
+    throw "base32: fallback unavailable. Install a real base32 tool (Git coreutils/busybox) for full support."
+}
+
+Add-UnixShimIfMissing -Name "cksum" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+
+    function Get-Crc32Value {
+        param([byte[]]$Bytes)
+        $crc = [uint32]0xFFFFFFFF
+        foreach ($b in $Bytes) {
+            $crc = $crc -bxor [uint32]$b
+            for ($j = 0; $j -lt 8; $j++) {
+                if (($crc -band 1) -ne 0) {
+                    $crc = ($crc -shr 1) -bxor [uint32]0xEDB88320
+                } else {
+                    $crc = $crc -shr 1
+                }
+            }
+        }
+        return (-bnot $crc) -band [uint32]0xFFFFFFFF
+    }
+
+    $targets = if ($ArgList.Count -gt 0) { $ArgList } else { @() }
+    if ($targets.Count -eq 0) {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes((@($input) -join "`n"))
+        $crc = Get-Crc32Value -Bytes $bytes
+        "{0} {1}" -f $crc, $bytes.Length
+        return
+    }
+
+    foreach ($path in $targets) {
+        $resolved = (Resolve-Path -LiteralPath $path).Path
+        $bytes = [System.IO.File]::ReadAllBytes($resolved)
+        $crc = Get-Crc32Value -Bytes $bytes
+        "{0} {1} {2}" -f $crc, $bytes.Length, $path
+    }
+}
+
+Add-UnixShimIfMissing -Name "sum" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    # Compatibility fallback: reuse cksum output format.
+    cksum @ArgList
+}
+
+Add-UnixShimIfMissing -Name "pv" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $count = 0L
+    $start = Get-Date
+    foreach ($item in $input) {
+        $line = [string]$item
+        $count += [System.Text.Encoding]::UTF8.GetByteCount($line + [Environment]::NewLine)
+        $item
+    }
+    $elapsed = (Get-Date) - $start
+    Write-Host ("[pv fallback] transferred {0} bytes in {1:n2}s" -f $count, $elapsed.TotalSeconds) -ForegroundColor DarkGray
+}
+
+Add-UnixShimIfMissing -Name "pr" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    if ($ArgList.Count -eq 0) {
+        $i = 1
+        foreach ($line in $input) {
+            "{0,6}  {1}" -f $i, $line
+            $i++
+        }
+        return
+    }
+    foreach ($path in $ArgList) {
+        "==== {0} ====" -f $path
+        $i = 1
+        Get-Content -LiteralPath $path | ForEach-Object {
+            "{0,6}  {1}" -f $i, $_
+            $i++
+        }
+    }
+}
+
+Add-UnixShimIfMissing -Name "cpio" -Body {
+    throw "cpio: fallback unavailable. Install cpio executable to use this command."
+}
+
+Add-UnixShimIfMissing -Name "cal" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $now = Get-Date
+    $month = $now.Month
+    $year = $now.Year
+    if ($ArgList.Count -eq 1) { $month = [int]$ArgList[0] }
+    if ($ArgList.Count -ge 2) { $year = [int]$ArgList[1] }
+    $first = [datetime]::new($year, $month, 1)
+    $days = [datetime]::DaysInMonth($year, $month)
+    "{0} {1}" -f $first.ToString("MMMM"), $year
+    "Su Mo Tu We Th Fr Sa"
+    $offset = [int]$first.DayOfWeek
+    $line = ("   " * $offset)
+    for ($d = 1; $d -le $days; $d++) {
+        $line += ("{0,2} " -f $d)
+        if ((($offset + $d) % 7) -eq 0) {
+            $line.TrimEnd()
+            $line = ""
+        }
+    }
+    if ($line.Trim().Length -gt 0) { $line.TrimEnd() }
+}
 '@
 
     Remove-ProfileBlock -ProfilePath $profilePath -StartMarker $legacyStart -EndMarker $legacyEnd
@@ -1224,6 +1504,28 @@ $script:UnixMissingShimCoverage = [ordered]@{
     which      = [ordered]@{ CoveredFlags = "<command ...>"; UnsupportedFlags = "Any flag option" }
     man        = [ordered]@{ CoveredFlags = "<command>"; UnsupportedFlags = "Any flag option" }
     source     = [ordered]@{ CoveredFlags = "<script> [args...]"; UnsupportedFlags = "Any flag option" }
+    apropos    = [ordered]@{ CoveredFlags = "<keyword>"; UnsupportedFlags = "Any flag option" }
+    make       = [ordered]@{ CoveredFlags = "[make args...]"; UnsupportedFlags = "Delegated to mingw32-make/nmake when available" }
+    open       = [ordered]@{ CoveredFlags = "[path|url ...]"; UnsupportedFlags = "Any flag option" }
+    'xdg-open' = [ordered]@{ CoveredFlags = "[path|url ...]"; UnsupportedFlags = "Any flag option" }
+    rename     = [ordered]@{ CoveredFlags = "<old-path> <new-name|new-path>"; UnsupportedFlags = "Any flag option" }
+    dos2unix   = [ordered]@{ CoveredFlags = "<file ...>"; UnsupportedFlags = "Any flag option" }
+    unix2dos   = [ordered]@{ CoveredFlags = "<file ...>"; UnsupportedFlags = "Any flag option" }
+    vdir       = [ordered]@{ CoveredFlags = "[path ...]"; UnsupportedFlags = "Any flag option" }
+    link       = [ordered]@{ CoveredFlags = "<target> <linkpath>"; UnsupportedFlags = "Any flag option" }
+    tput       = [ordered]@{ CoveredFlags = "clear|reset|cols|lines"; UnsupportedFlags = "Any other capability token" }
+    sync       = [ordered]@{ CoveredFlags = "(no flags)"; UnsupportedFlags = "All flags unsupported" }
+    at         = [ordered]@{ CoveredFlags = "HH:mm <command...>"; UnsupportedFlags = "Any other syntax" }
+    aspell     = [ordered]@{ CoveredFlags = "(none in fallback)"; UnsupportedFlags = "Fallback unavailable (install executable)" }
+    bc         = [ordered]@{ CoveredFlags = "<expression>"; UnsupportedFlags = "Any flag option" }
+    base64     = [ordered]@{ CoveredFlags = "-d, --decode, -w N, [file]"; UnsupportedFlags = "Any other short/long option" }
+    base32     = [ordered]@{ CoveredFlags = "(none in fallback)"; UnsupportedFlags = "Fallback unavailable (install executable)" }
+    cksum      = [ordered]@{ CoveredFlags = "[file ...] or stdin"; UnsupportedFlags = "Any flag option" }
+    sum        = [ordered]@{ CoveredFlags = "[file ...] or stdin"; UnsupportedFlags = "Any flag option" }
+    pv         = [ordered]@{ CoveredFlags = "stdin passthrough"; UnsupportedFlags = "Any flag option" }
+    pr         = [ordered]@{ CoveredFlags = "[file ...] or stdin"; UnsupportedFlags = "Any flag option" }
+    cpio       = [ordered]@{ CoveredFlags = "(none in fallback)"; UnsupportedFlags = "Fallback unavailable (install executable)" }
+    cal        = [ordered]@{ CoveredFlags = "[month] [year]"; UnsupportedFlags = "Any flag option" }
 }
 
 function Convert-UnixCoverageEntry {
@@ -1974,10 +2276,11 @@ if ($CreateShims) {
         $toolsToShim = @(
             # Text search & processing
             "grep", "egrep", "fgrep", "sed", "awk", "gawk",
+            "apropos", "aspell",
 
             # File ops (NOTE: rd shim won't override CMD/PowerShell built-in)
             "find", "cat", "cp", "mv", "rm", "rmdir", "touch", "ln", "ls",
-            "pwd", "basename", "dirname", "realpath", "file", "which",
+            "pwd", "basename", "dirname", "realpath", "file", "which", "vdir", "link", "rename",
             "chmod", "chown", "chgrp", "stat", "install", "mktemp", "setfacl", "getfacl",
             "readlink", "truncate",
 
@@ -1993,13 +2296,14 @@ if ($CreateShims) {
             "diff", "diff3", "cmp", "patch", "sdiff",
 
             # Compression / archives
-            "tar", "gzip", "gunzip", "zip", "unzip", "bzip2", "bunzip2", "xz", "unxz",
+            "tar", "gzip", "gunzip", "zip", "unzip", "bzip2", "bunzip2", "xz", "unxz", "cpio",
 
             # Stream processing
-            "xargs", "tee", "wc", "iconv",
+            "xargs", "tee", "wc", "iconv", "pv",
 
             # Utilities
-            "env", "expr", "seq", "yes", "base64", "printf", "echo", "test", "true", "false",
+            "env", "expr", "seq", "yes", "base32", "base64", "printf", "echo", "test", "true", "false",
+            "bc", "cal", "cksum", "sum", "sync", "tput", "pr", "at",
             "tty", "nproc", "timeout", "factor", "stdbuf", "printenv",
             "dircolors", "pathchk", "mkfifo", "users", "logname", "groups",
             "date", "sleep", "time", "uname", "hostname", "whoami", "id", "who", "w", "last",
@@ -2013,12 +2317,13 @@ if ($CreateShims) {
             "curl", "wget", "ping", "traceroute", "nslookup", "dig", "host", "whois",
             "netstat", "ss", "ifconfig", "ip", "route", "arp", "ncat",
             "ssh", "ssh-keygen", "ssh-agent", "ssh-add", "scp", "sftp", "ftp", "telnet", "rsync", "nc",
+            "open", "xdg-open",
 
             # Shells
-            "bash", "sh", "perl",
+            "bash", "sh", "perl", "make",
 
             # Editors
-            "nano", "vi", "vim",
+            "nano", "vi", "vim", "dos2unix", "unix2dos",
 
             # Security / crypto
             "openssl", "gpg"
@@ -2183,7 +2488,7 @@ if ($CreateShims) {
     }
 }
 if ($InstallProfileShims) {
-    Write-Host "- Missing-command profile shims installed for: export, rev, unset, mkdirp, ll, clear-hist, clear, pwd, history, touch, head, tail, wc, grep, egrep, fgrep, nc, which, man, source" -ForegroundColor Cyan
+    Write-Host "- Missing-command profile shims installed for: export, rev, unset, mkdirp, ll, clear-hist, clear, pwd, history, touch, head, tail, wc, grep, egrep, fgrep, nc, which, man, source, apropos, make, open, xdg-open, rename, dos2unix, unix2dos, vdir, link, tput, sync, at, aspell, bc, cal, base64, base32, cksum, sum, pv, pr, cpio" -ForegroundColor Cyan
     Write-Host "- Alias-compat wrappers installed for common commands: rm, cp, mv, mkdir, ls, cat, sort, diff, tee, sleep" -ForegroundColor Cyan
     Write-Host "- Profile shims are idempotent and stored in marker blocks under your profile" -ForegroundColor Cyan
     Write-Host "- Coverage report command: Show-UnixCoverageReport -IncludeMissing" -ForegroundColor Cyan
