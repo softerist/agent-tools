@@ -123,7 +123,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$ScriptVersion = "2.1.0"
+$ScriptVersion = "2.1.1"
 $script:PathScope = if ($UserScope) { "User" } else { "Machine" }
 $script:PathDisplay = "$($script:PathScope) PATH"
 
@@ -1083,6 +1083,72 @@ Add-UnixShimIfMissing -Name "fgrep" -Body {
     Invoke-GrepShim -ArgList $ArgList -InputItems @($input) -SimpleMatch
 }
 
+Add-UnixShimIfMissing -Name "rgf" -Body {
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [string]$Pattern,
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$Rest
+    )
+    $rg = Get-Command rg -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $rg) {
+        throw "rgf: ripgrep 'rg' not found. Install with -InstallOptionalTools or winget install --id BurntSushi.ripgrep.MSVC --exact."
+    }
+    & $rg.Source -n -F -- $Pattern @Rest
+}
+Add-UnixShimIfMissing -Name "rgs" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $rg = Get-Command rg -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $rg) {
+        throw "rgs: ripgrep 'rg' not found. Install with -InstallOptionalTools or winget install --id BurntSushi.ripgrep.MSVC --exact."
+    }
+
+    $output = & $rg.Source @ArgList 2>&1
+    $exit = $LASTEXITCODE
+    if ($exit -eq 0) {
+        $output
+        return
+    }
+
+    if (-not ($ArgList -contains "--")) {
+        $flagToken = $null
+        foreach ($line in @($output)) {
+            if ([string]$line -match "unrecognized flag (.+)$") {
+                $flagToken = $matches[1].Trim()
+                break
+            }
+        }
+        if ($flagToken) {
+            $idx = [Array]::IndexOf($ArgList, $flagToken)
+            if ($idx -ge 0) {
+                $fixedArgs = @()
+                if ($idx -gt 0) { $fixedArgs += $ArgList[0..($idx - 1)] }
+                $fixedArgs += "--"
+                $fixedArgs += $ArgList[$idx..($ArgList.Count - 1)]
+                $retry = & $rg.Source @fixedArgs 2>&1
+                $retryExit = $LASTEXITCODE
+                if ($retryExit -eq 0) {
+                    $retry
+                    return
+                }
+                $output = $retry
+                $exit = $retryExit
+            }
+        }
+    }
+
+    foreach ($line in @($output)) {
+        [Console]::Error.WriteLine([string]$line)
+    }
+    $global:LASTEXITCODE = $exit
+}
+if (-not (Get-Command rgl -ErrorAction SilentlyContinue)) {
+    Set-Alias -Name rgl -Value rgf -Scope Global
+}
+if (Get-Command rg -CommandType Application -ErrorAction SilentlyContinue) {
+    Set-Alias -Name rg -Value rgs -Scope Global -Force
+}
+
 Add-UnixShimIfMissing -Name "nc" -Body {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
     $ncat = Get-Command ncat -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -1500,6 +1566,10 @@ $script:UnixMissingShimCoverage = [ordered]@{
     grep       = [ordered]@{ CoveredFlags = "-i, -n, -v, -r, -R"; UnsupportedFlags = "Any other short/long option" }
     egrep      = [ordered]@{ CoveredFlags = "-i, -n, -v, -r, -R"; UnsupportedFlags = "Any other short/long option" }
     fgrep      = [ordered]@{ CoveredFlags = "-i, -n, -v, -r, -R"; UnsupportedFlags = "Any other short/long option" }
+    rgf        = [ordered]@{ CoveredFlags = "<pattern> [path ...] (fixed string, line numbers)"; UnsupportedFlags = "Delegated to rg executable" }
+    rgl        = [ordered]@{ CoveredFlags = "Alias to rgf"; UnsupportedFlags = "Same as rgf" }
+    rgs        = [ordered]@{ CoveredFlags = "[rg args...] with auto '--' retry for unrecognized long-flag-like literal"; UnsupportedFlags = "Delegated to rg executable" }
+    rg         = [ordered]@{ CoveredFlags = "Alias to rgs (profile mode)"; UnsupportedFlags = "Same as rgs" }
     nc         = [ordered]@{ CoveredFlags = "[ncat-compatible args...]"; UnsupportedFlags = "Delegated to ncat when installed" }
     which      = [ordered]@{ CoveredFlags = "<command ...>"; UnsupportedFlags = "Any flag option" }
     man        = [ordered]@{ CoveredFlags = "<command>"; UnsupportedFlags = "Any flag option" }
@@ -2396,6 +2466,15 @@ if ($InstallProfileShims) {
     if ($PSCmdlet.ShouldProcess($PROFILE.CurrentUserCurrentHost, "Install/update unix-tools profile shim blocks")) {
         Install-ProfileMissingShims
         Install-ProfileAliasCompat
+        try {
+            $profilePath = $PROFILE.CurrentUserCurrentHost
+            if (Test-Path $profilePath) {
+                . $profilePath
+                Write-Host "[OK] Reloaded profile in current session (. `$PROFILE)" -ForegroundColor Green
+            }
+        } catch {
+            Write-Warning "Profile reload failed in current session: $($_.Exception.Message). Open a new terminal or run '. `$PROFILE' manually."
+        }
         $didChange = $true
     } else {
         Write-Host "Skipped by -WhatIf/-Confirm: profile shim installation." -ForegroundColor DarkGray
@@ -2488,7 +2567,7 @@ if ($CreateShims) {
     }
 }
 if ($InstallProfileShims) {
-    Write-Host "- Missing-command profile shims installed for: export, rev, unset, mkdirp, ll, clear-hist, clear, pwd, history, touch, head, tail, wc, grep, egrep, fgrep, nc, which, man, source, apropos, make, open, xdg-open, rename, dos2unix, unix2dos, vdir, link, tput, sync, at, aspell, bc, cal, base64, base32, cksum, sum, pv, pr, cpio" -ForegroundColor Cyan
+    Write-Host "- Missing-command profile shims installed for: export, rev, unset, mkdirp, ll, clear-hist, clear, pwd, history, touch, head, tail, wc, grep, egrep, fgrep, rgf/rgl/rgs (and rg alias), nc, which, man, source, apropos, make, open, xdg-open, rename, dos2unix, unix2dos, vdir, link, tput, sync, at, aspell, bc, cal, base64, base32, cksum, sum, pv, pr, cpio" -ForegroundColor Cyan
     Write-Host "- Alias-compat wrappers installed for common commands: rm, cp, mv, mkdir, ls, cat, sort, diff, tee, sleep" -ForegroundColor Cyan
     Write-Host "- Profile shims are idempotent and stored in marker blocks under your profile" -ForegroundColor Cyan
     Write-Host "- Coverage report command: Show-UnixCoverageReport -IncludeMissing" -ForegroundColor Cyan
