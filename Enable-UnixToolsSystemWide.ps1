@@ -420,6 +420,103 @@ Add-UnixShimIfMissing -Name "grep" -Body {
         $result
     }
 }
+
+Add-UnixShimIfMissing -Name "egrep" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    grep @Args
+}
+
+Add-UnixShimIfMissing -Name "fgrep" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+
+    $ignoreCase = $false
+    $lineNumber = $false
+    $invert = $false
+    $recursive = $false
+    $pattern = $null
+    $paths = @()
+
+    foreach ($a in $Args) {
+        if ($a -match '^-[A-Za-z]+$') {
+            foreach ($ch in $a.Substring(1).ToCharArray()) {
+                switch ($ch) {
+                    'i' { $ignoreCase = $true; continue }
+                    'n' { $lineNumber = $true; continue }
+                    'v' { $invert = $true; continue }
+                    'r' { $recursive = $true; continue }
+                    'R' { $recursive = $true; continue }
+                    default { throw "fgrep: unsupported option -$ch (fallback supports -i, -n, -v, -r)" }
+                }
+            }
+            continue
+        }
+
+        if ($null -eq $pattern) {
+            $pattern = $a
+        } else {
+            $paths += $a
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($pattern)) {
+        throw "usage: fgrep [-i] [-n] [-v] [-r] <pattern> [file|dir ...]"
+    }
+
+    $result = $null
+    if ($paths.Count -gt 0) {
+        if ($recursive) {
+            $targets = @()
+            foreach ($p in $paths) {
+                if (Test-Path -Path $p -PathType Container) { $targets += (Join-Path $p "*") }
+                else { $targets += $p }
+            }
+            $result = Select-String -Pattern $pattern -Path $targets -Recurse -SimpleMatch -CaseSensitive:(-not $ignoreCase) -NotMatch:$invert -ErrorAction SilentlyContinue
+        } else {
+            $result = Select-String -Pattern $pattern -Path $paths -SimpleMatch -CaseSensitive:(-not $ignoreCase) -NotMatch:$invert -ErrorAction SilentlyContinue
+        }
+    } else {
+        $inputItems = @($input)
+        if ($inputItems.Count -gt 0) {
+            $result = $inputItems | Select-String -Pattern $pattern -SimpleMatch -CaseSensitive:(-not $ignoreCase) -NotMatch:$invert
+        } else {
+            $defaultPath = if ($recursive) { @(".\*") } else { @(".") }
+            $result = Select-String -Pattern $pattern -Path $defaultPath -Recurse:$recursive -SimpleMatch -CaseSensitive:(-not $ignoreCase) -NotMatch:$invert -ErrorAction SilentlyContinue
+        }
+    }
+
+    if ($lineNumber) {
+        $result | ForEach-Object { "{0}:{1}:{2}" -f $_.Path, $_.LineNumber, $_.Line }
+    } else {
+        $result
+    }
+}
+
+Add-UnixShimIfMissing -Name "which" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Names)
+    foreach ($name in $Names) {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($cmd) {
+            if ($cmd.Source) { $cmd.Source }
+            elseif ($cmd.Definition) { $cmd.Definition }
+            else { $cmd.Name }
+        }
+    }
+}
+
+Add-UnixShimIfMissing -Name "man" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    if ($Args.Count -eq 0) { throw "usage: man <command>" }
+    Get-Help $Args[0] -Full
+}
+
+Add-UnixShimIfMissing -Name "source" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    if ($Args.Count -eq 0) { throw "usage: source <script> [args...]" }
+    $path = $Args[0]
+    $rest = @()
+    if ($Args.Count -gt 1) { $rest = $Args[1..($Args.Count - 1)] }
+    . $path @rest
+}
 '@
 
     Remove-ProfileBlock -ProfilePath $profilePath -StartMarker $legacyStart -EndMarker $legacyEnd
@@ -746,7 +843,7 @@ if ($CreateShims) {
     # Coverage baseline expanded from common Unix/Linux command references.
     $toolsToShim = @(
         # Text search & processing
-        "grep", "sed", "awk", "gawk",
+        "grep", "egrep", "fgrep", "sed", "awk", "gawk",
 
         # File ops (NOTE: rd shim won't override CMD/PowerShell built-in)
         "find", "cat", "cp", "mv", "rm", "rmdir", "touch", "ln", "ls",
@@ -775,11 +872,11 @@ if ($CreateShims) {
         "md5sum", "sha1sum", "sha256sum",
         "df", "du", "dd", "man", "whereis", "locate", "updatedb", "crontab",
         "ps", "top", "kill", "killall", "pkill", "pgrep", "nice", "renice", "nohup",
-        "free", "uptime", "vmstat", "dmesg", "lsof",
+        "free", "uptime", "vmstat", "dmesg", "lsof", "htop", "watch",
         "sudo", "su",
 
         # Network
-        "curl", "wget", "ping", "traceroute", "nslookup", "dig", "host",
+        "curl", "wget", "ping", "traceroute", "nslookup", "dig", "host", "whois",
         "netstat", "ss", "ifconfig", "ip", "route", "arp",
         "ssh", "scp", "sftp", "ftp", "telnet", "rsync",
 
@@ -792,7 +889,7 @@ if ($CreateShims) {
 
     # Optional third-party tools that may already be installed in PATH.
     $externalTools = @(
-        "rg", "fd", "jq", "yq", "bat", "eza", "fzf"
+        "rg", "fd", "jq", "yq", "bat", "eza", "fzf", "ack", "ag"
     )
 
     $searchDirs = @($gitUsrBin)
@@ -915,7 +1012,7 @@ if ($CreateShims) {
     Write-Host "• Uninstalling Git will remove shims automatically" -ForegroundColor Cyan
 }
 if ($InstallProfileShims) {
-    Write-Host "• Missing-command profile shims installed for: export, rev, unset, mkdirp, ll, clear-hist, clear, pwd, history, grep" -ForegroundColor Cyan
+    Write-Host "• Missing-command profile shims installed for: export, rev, unset, mkdirp, ll, clear-hist, clear, pwd, history, grep, egrep, fgrep, which, man, source" -ForegroundColor Cyan
     Write-Host "• Alias-compat wrappers installed for common commands: rm, cp, mv, mkdir, ls, cat, sort, diff, tee, sleep" -ForegroundColor Cyan
     Write-Host "• Profile shims are idempotent and stored in marker blocks under your profile" -ForegroundColor Cyan
 }
