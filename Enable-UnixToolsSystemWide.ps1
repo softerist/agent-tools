@@ -374,15 +374,29 @@ function Ensure-OptionalPackageManagers {
 
     if (-not $scoopAvailable) {
         Write-Host "  [INFO] scoop not found. Attempting scoop bootstrap..." -ForegroundColor DarkGray
+        $scoopScriptUrls = @(
+            "https://raw.githubusercontent.com/scoopinstaller/install/master/install.ps1",
+            "https://get.scoop.sh"
+        )
         try {
             Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force -ErrorAction SilentlyContinue
-            Invoke-RestMethod -Uri "https://get.scoop.sh" | Invoke-Expression
         } catch {
-            Write-Host "  [INFO] scoop bootstrap failed: $($_.Exception.Message)" -ForegroundColor DarkGray
+            Write-Host "  [INFO] Could not set execution policy for CurrentUser: $($_.Exception.Message)" -ForegroundColor DarkGray
         }
-        $scoopAvailable = [bool](Get-Command scoop -ErrorAction SilentlyContinue)
+        foreach ($url in $scoopScriptUrls) {
+            if ($scoopAvailable) { break }
+            try {
+                Write-Host "  [INFO] Running scoop bootstrap from: $url" -ForegroundColor DarkGray
+                Invoke-RestMethod -Uri $url | Invoke-Expression
+            } catch {
+                Write-Host "  [INFO] scoop bootstrap attempt failed ($url): $($_.Exception.Message)" -ForegroundColor DarkGray
+            }
+            $scoopAvailable = [bool](Get-Command scoop -ErrorAction SilentlyContinue)
+        }
         if ($scoopAvailable) {
             Write-Host "  [OK] scoop installed." -ForegroundColor Green
+        } else {
+            Write-Host "  [INFO] scoop bootstrap failed from all configured URLs." -ForegroundColor DarkGray
         }
     }
 
