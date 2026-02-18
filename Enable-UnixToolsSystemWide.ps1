@@ -1074,7 +1074,7 @@ function Show-UnsupportedFlag {
         "",
         "How to add support for this flag:",
         "1) Open `$PROFILE and find marker: # >>> unix-tools-alias-compat >>>",
-        "2) Find: Set-UnixCommand -Name ""$Command"" -Fallback { ... }",
+        "2) Find: Set-UnixCommand -Name '$Command' -Fallback { ... }",
         "3) Extend that parser switch/if to handle '$Flag'",
         "4) Or update installer block and re-run: Enable-UnixToolsSystemWide.ps1 -InstallProfileShims",
         "",
@@ -1861,13 +1861,15 @@ if ($CreateShims) {
             "find", "cat", "cp", "mv", "rm", "rmdir", "touch", "ln", "ls",
             "pwd", "basename", "dirname", "realpath", "file", "which",
             "chmod", "chown", "chgrp", "stat", "install", "mktemp", "setfacl", "getfacl",
+            "readlink", "truncate",
 
             # Text manipulation
             "sort", "uniq", "tr", "cut", "paste", "join", "comm", "split",
             "fmt", "fold", "expand", "unexpand", "strings", "nl",
+            "shuf", "csplit", "tsort", "numfmt", "column",
 
             # File viewing
-            "less", "more", "head", "tail", "tac", "rev", "od",
+            "less", "more", "head", "tail", "tac", "rev", "od", "xxd",
 
             # Comparison
             "diff", "diff3", "cmp", "patch", "sdiff",
@@ -1876,10 +1878,12 @@ if ($CreateShims) {
             "tar", "gzip", "gunzip", "zip", "unzip", "bzip2", "bunzip2", "xz", "unxz",
 
             # Stream processing
-            "xargs", "tee", "wc",
+            "xargs", "tee", "wc", "iconv",
 
             # Utilities
-            "env", "expr", "seq", "yes", "base64", "printf",
+            "env", "expr", "seq", "yes", "base64", "printf", "echo", "test", "true", "false",
+            "tty", "nproc", "timeout", "factor", "stdbuf", "printenv",
+            "dircolors", "pathchk", "mkfifo", "users", "logname", "groups",
             "date", "sleep", "time", "uname", "hostname", "whoami", "id", "who", "w", "last",
             "md5sum", "sha1sum", "sha256sum",
             "df", "du", "dd", "man", "whereis", "locate", "updatedb", "crontab",
@@ -1890,13 +1894,16 @@ if ($CreateShims) {
             # Network
             "curl", "wget", "ping", "traceroute", "nslookup", "dig", "host", "whois",
             "netstat", "ss", "ifconfig", "ip", "route", "arp",
-            "ssh", "scp", "sftp", "ftp", "telnet", "rsync",
+            "ssh", "ssh-keygen", "ssh-agent", "ssh-add", "scp", "sftp", "ftp", "telnet", "rsync", "nc",
 
             # Shells
-            "bash", "sh",
+            "bash", "sh", "perl",
 
             # Editors
-            "nano", "vi", "vim"
+            "nano", "vi", "vim",
+
+            # Security / crypto
+            "openssl", "gpg"
         )
 
         # Optional third-party tools that may already be installed in PATH.
