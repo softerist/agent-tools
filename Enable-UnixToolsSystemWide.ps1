@@ -332,6 +332,94 @@ Add-UnixShimIfMissing -Name "clear-hist" -Body {
         [Microsoft.PowerShell.PSConsoleReadLine]::ClearHistory()
     }
 }
+
+Add-UnixShimIfMissing -Name "clear" -Body {
+    Clear-Host
+}
+
+Add-UnixShimIfMissing -Name "pwd" -Body {
+    (Get-Location).Path
+}
+
+Add-UnixShimIfMissing -Name "history" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    $items = Get-History
+    if ($Args.Count -gt 0) {
+        $count = 0
+        if ([int]::TryParse($Args[0], [ref]$count) -and $count -gt 0) {
+            $items | Select-Object -Last $count
+            return
+        }
+    }
+    $items
+}
+
+Add-UnixShimIfMissing -Name "grep" -Body {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+
+    $ignoreCase = $false
+    $lineNumber = $false
+    $invert = $false
+    $recursive = $false
+    $pattern = $null
+    $paths = @()
+
+    foreach ($a in $Args) {
+        if ($a -match '^-[A-Za-z]+$') {
+            foreach ($ch in $a.Substring(1).ToCharArray()) {
+                switch ($ch) {
+                    'i' { $ignoreCase = $true; continue }
+                    'n' { $lineNumber = $true; continue }
+                    'v' { $invert = $true; continue }
+                    'r' { $recursive = $true; continue }
+                    'R' { $recursive = $true; continue }
+                    default { throw "grep: unsupported option -$ch (fallback supports -i, -n, -v, -r)" }
+                }
+            }
+            continue
+        }
+
+        if ($null -eq $pattern) {
+            $pattern = $a
+        } else {
+            $paths += $a
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($pattern)) {
+        throw "usage: grep [-i] [-n] [-v] [-r] <pattern> [file|dir ...]"
+    }
+
+    $isCaseSensitive = -not $ignoreCase
+    $result = $null
+
+    if ($paths.Count -gt 0) {
+        if ($recursive) {
+            $targets = @()
+            foreach ($p in $paths) {
+                if (Test-Path -Path $p -PathType Container) { $targets += (Join-Path $p "*") }
+                else { $targets += $p }
+            }
+            $result = Select-String -Pattern $pattern -Path $targets -Recurse -CaseSensitive:$isCaseSensitive -NotMatch:$invert -ErrorAction SilentlyContinue
+        } else {
+            $result = Select-String -Pattern $pattern -Path $paths -CaseSensitive:$isCaseSensitive -NotMatch:$invert -ErrorAction SilentlyContinue
+        }
+    } else {
+        $inputItems = @($input)
+        if ($inputItems.Count -gt 0) {
+            $result = $inputItems | Select-String -Pattern $pattern -CaseSensitive:$isCaseSensitive -NotMatch:$invert
+        } else {
+            $defaultPath = if ($recursive) { @(".\*") } else { @(".") }
+            $result = Select-String -Pattern $pattern -Path $defaultPath -Recurse:$recursive -CaseSensitive:$isCaseSensitive -NotMatch:$invert -ErrorAction SilentlyContinue
+        }
+    }
+
+    if ($lineNumber) {
+        $result | ForEach-Object { "{0}:{1}:{2}" -f $_.Path, $_.LineNumber, $_.Line }
+    } else {
+        $result
+    }
+}
 '@
 
     Remove-ProfileBlock -ProfilePath $profilePath -StartMarker $legacyStart -EndMarker $legacyEnd
@@ -663,7 +751,7 @@ if ($CreateShims) {
         # File ops (NOTE: rd shim won't override CMD/PowerShell built-in)
         "find", "cat", "cp", "mv", "rm", "rmdir", "touch", "ln", "ls",
         "pwd", "basename", "dirname", "realpath", "file", "which",
-        "chmod", "chown", "chgrp", "stat", "install", "mktemp",
+        "chmod", "chown", "chgrp", "stat", "install", "mktemp", "setfacl", "getfacl",
 
         # Text manipulation
         "sort", "uniq", "tr", "cut", "paste", "join", "comm", "split",
@@ -688,14 +776,18 @@ if ($CreateShims) {
         "df", "du", "dd", "man", "whereis", "locate", "updatedb", "crontab",
         "ps", "top", "kill", "killall", "pkill", "pgrep", "nice", "renice", "nohup",
         "free", "uptime", "vmstat", "dmesg", "lsof",
+        "sudo", "su",
 
         # Network
         "curl", "wget", "ping", "traceroute", "nslookup", "dig", "host",
         "netstat", "ss", "ifconfig", "ip", "route", "arp",
-        "ssh", "scp", "sftp", "ftp", "telnet",
+        "ssh", "scp", "sftp", "ftp", "telnet", "rsync",
 
         # Shells
-        "bash", "sh"
+        "bash", "sh",
+
+        # Editors
+        "nano", "vi", "vim"
     )
 
     # Optional third-party tools that may already be installed in PATH.
@@ -823,7 +915,7 @@ if ($CreateShims) {
     Write-Host "• Uninstalling Git will remove shims automatically" -ForegroundColor Cyan
 }
 if ($InstallProfileShims) {
-    Write-Host "• Missing-command profile shims installed for: export, rev, unset, mkdirp, ll, clear-hist" -ForegroundColor Cyan
+    Write-Host "• Missing-command profile shims installed for: export, rev, unset, mkdirp, ll, clear-hist, clear, pwd, history, grep" -ForegroundColor Cyan
     Write-Host "• Alias-compat wrappers installed for common commands: rm, cp, mv, mkdir, ls, cat, sort, diff, tee, sleep" -ForegroundColor Cyan
     Write-Host "• Profile shims are idempotent and stored in marker blocks under your profile" -ForegroundColor Cyan
 }
