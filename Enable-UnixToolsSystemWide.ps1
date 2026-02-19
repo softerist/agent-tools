@@ -403,9 +403,7 @@ function Get-OptionalToolCatalog {
         [pscustomobject]@{ Command = "dust";    WingetId = "bootandy.dust";            ChocoId = "du-dust"; ScoopId = "dust"    },
         [pscustomobject]@{ Command = "procs";   WingetId = "dalance.procs";            ChocoId = "procs";   ScoopId = "procs"   },
         [pscustomobject]@{ Command = "btm";     WingetId = "ClementTsang.bottom";      ChocoId = "bottom";  ScoopId = "bottom"  },
-        [pscustomobject]@{ Command = "curlie";  WingetId = "rs.curlie";                ChocoId = "curlie";  ScoopId = "curlie"  },
-        [pscustomobject]@{ Command = "http";    WingetId = "httpie.httpie";            ChocoId = "httpie";  ScoopId = "httpie"  }
-    )
+        [pscustomobject]@{ Command = "curlie";  WingetId = "rs.curlie";                ChocoId = "curlie";  ScoopId = "curlie"  }    )
 }
 
 function Ensure-OptionalPackageManagers {
