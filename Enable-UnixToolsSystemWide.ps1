@@ -118,7 +118,8 @@ param(
     [switch]$Uninstall,
     [string]$LogPath,
     [Alias('h')]
-    [switch]$Help
+    [switch]$Help,
+    [switch]$DryRun
 )
 
 Set-StrictMode -Version Latest
@@ -139,6 +140,10 @@ function Assert-Admin {
         return
     }
     if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        if ($script:DryRun) {
+            Write-Warning "Running in DryRun mode (admin checks relaxed)."
+            return
+        }
         throw "Please run PowerShell as Administrator, or use -UserScope."
     }
 }
@@ -196,7 +201,11 @@ function Add-MachinePathPrepend([string]$pathToPrepend) {
 
     $newPath = (@($norm) + $parts) -join ';'
     Assert-PathLength -PathValue $newPath -Scope $scope
-    [Environment]::SetEnvironmentVariable("Path", $newPath, $scope)
+    if ($script:DryRun) {
+        Write-Host "[DRYRUN] [Environment]::SetEnvironmentVariable('Path', '...len=$($newPath.Length)...', '$scope')" -ForegroundColor DarkGray
+    } else {
+        [Environment]::SetEnvironmentVariable("Path", $newPath, $scope)
+    }
 }
 
 function Add-MachinePathEntries([string[]]$pathsToAdd) {
@@ -224,7 +233,11 @@ function Add-MachinePathEntries([string[]]$pathsToAdd) {
     if ($changed) {
         $newPath = $parts -join ';'
         Assert-PathLength -PathValue $newPath -Scope $scope
-        [Environment]::SetEnvironmentVariable("Path", $newPath, $scope)
+        if ($script:DryRun) {
+            Write-Host "[DRYRUN] [Environment]::SetEnvironmentVariable('Path', '...len=$($newPath.Length)...', '$scope')" -ForegroundColor DarkGray
+        } else {
+            [Environment]::SetEnvironmentVariable("Path", $newPath, $scope)
+        }
     }
 
     return $changed
@@ -252,7 +265,11 @@ function Remove-MachinePathEntries([string[]]$pathsToRemove) {
     if (($newParts -join ';') -eq ($parts -join ';')) { return $false }
     $newPath = $newParts -join ';'
     Assert-PathLength -PathValue $newPath -Scope $scope
-    [Environment]::SetEnvironmentVariable("Path", $newPath, $scope)
+    if ($script:DryRun) {
+        Write-Host "[DRYRUN] [Environment]::SetEnvironmentVariable('Path', '...len=$($newPath.Length)...', '$scope')" -ForegroundColor DarkGray
+    } else {
+        [Environment]::SetEnvironmentVariable("Path", $newPath, $scope)
+    }
     return $true
 }
 
@@ -273,12 +290,20 @@ function Update-MachinePathEntries {
 
     $newPath = $newParts -join ';'
     Assert-PathLength -PathValue $newPath -Scope $scope
-    [Environment]::SetEnvironmentVariable("Path", $newPath, $scope)
+    if ($script:DryRun) {
+        Write-Host "[DRYRUN] [Environment]::SetEnvironmentVariable('Path', '...len=$($newPath.Length)...', '$scope')" -ForegroundColor DarkGray
+    } else {
+        [Environment]::SetEnvironmentVariable("Path", $newPath, $scope)
+    }
 }
 
 function New-DirectoryIfMissing([string]$dir) {
     if (-not (Test-Path $dir)) {
-        New-Item -ItemType Directory -Path $dir | Out-Null
+        if ($script:DryRun) {
+            Write-Host "[DRYRUN] New-Item -ItemType Directory -Path '$dir'" -ForegroundColor DarkGray
+        } else {
+            New-Item -ItemType Directory -Path $dir | Out-Null
+        }
     }
 }
 
@@ -293,6 +318,10 @@ function Write-ShimCmd([string]$shimDir, [string]$name, [string]$targetExePath) 
         "set ""_unix_tool=$safeTarget"""
         """%_unix_tool%"" %*"
     ) -join "`r`n"
+    if ($script:DryRun) {
+        Write-Host "[DRYRUN] Set-Content '$shimPath' (Create shim for $name -> $targetExePath)" -ForegroundColor DarkGray
+        return $true
+    }
     Set-Content -Path $shimPath -Value $content -Encoding ASCII
     return $true
 }
@@ -354,16 +383,28 @@ function Get-ApplicationCommandIndex([string]$excludeDir = $null) {
 
 function Get-OptionalToolCatalog {
     return @(
-        [pscustomobject]@{ Command = "rg";  WingetId = "BurntSushi.ripgrep.MSVC"; ChocoId = "ripgrep"; ScoopId = "ripgrep" },
-        [pscustomobject]@{ Command = "fd";  WingetId = "sharkdp.fd";               ChocoId = "fd";      ScoopId = "fd"      },
-        [pscustomobject]@{ Command = "jq";  WingetId = "jqlang.jq";                ChocoId = "jq";      ScoopId = "jq"      },
-        [pscustomobject]@{ Command = "yq";  WingetId = "MikeFarah.yq";             ChocoId = "yq";      ScoopId = "yq"      },
-        [pscustomobject]@{ Command = "bat"; WingetId = "sharkdp.bat";              ChocoId = "bat";     ScoopId = "bat"     },
-        [pscustomobject]@{ Command = "eza"; WingetId = "eza-community.eza";        ChocoId = "eza";     ScoopId = "eza"     },
-        [pscustomobject]@{ Command = "fzf"; WingetId = "junegunn.fzf";             ChocoId = "fzf";     ScoopId = "fzf"     },
-        [pscustomobject]@{ Command = "ag";  WingetId = "JFLarvoire.Ag";            ChocoId = "ag";      ScoopId = "ag"      },
-        [pscustomobject]@{ Command = "ack"; WingetId = $null;                      ChocoId = $null;     ScoopId = "ack"     },
-        [pscustomobject]@{ Command = "ncat";WingetId = "Insecure.Nmap";            ChocoId = "nmap";    ScoopId = "nmap"    }
+        [pscustomobject]@{ Command = "rg";      WingetId = "BurntSushi.ripgrep.MSVC";  ChocoId = "ripgrep"; ScoopId = "ripgrep" },
+        [pscustomobject]@{ Command = "fd";      WingetId = "sharkdp.fd";               ChocoId = "fd";      ScoopId = "fd"      },
+        [pscustomobject]@{ Command = "jq";      WingetId = "jqlang.jq";                ChocoId = "jq";      ScoopId = "jq"      },
+        [pscustomobject]@{ Command = "yq";      WingetId = "MikeFarah.yq";             ChocoId = "yq";      ScoopId = "yq"      },
+        [pscustomobject]@{ Command = "bat";     WingetId = "sharkdp.bat";              ChocoId = "bat";     ScoopId = "bat"     },
+        [pscustomobject]@{ Command = "eza";     WingetId = "eza-community.eza";        ChocoId = "eza";     ScoopId = "eza"     },
+        [pscustomobject]@{ Command = "fzf";     WingetId = "junegunn.fzf";             ChocoId = "fzf";     ScoopId = "fzf"     },
+        [pscustomobject]@{ Command = "ag";      WingetId = "JFLarvoire.Ag";            ChocoId = "ag";      ScoopId = "ag"      },
+        [pscustomobject]@{ Command = "ack";     WingetId = $null;                      ChocoId = $null;     ScoopId = "ack"     },
+        [pscustomobject]@{ Command = "ncat";    WingetId = "Insecure.Nmap";            ChocoId = "nmap";    ScoopId = "nmap"    },
+        
+        # Expanded modern tools
+        [pscustomobject]@{ Command = "tldr";    WingetId = "tldr-pages.tldr";          ChocoId = "tldr";    ScoopId = "tldr"    },
+        [pscustomobject]@{ Command = "zoxide";  WingetId = "ajeetdsouza.zoxide";       ChocoId = "zoxide";  ScoopId = "zoxide"  },
+        [pscustomobject]@{ Command = "delta";   WingetId = "dandavison.delta";         ChocoId = "delta";   ScoopId = "delta"   },
+        [pscustomobject]@{ Command = "gh";      WingetId = "GitHub.cli";               ChocoId = "gh";      ScoopId = "gh"      },
+        [pscustomobject]@{ Command = "lazygit"; WingetId = "JesseDuffield.lazygit";    ChocoId = "lazygit"; ScoopId = "lazygit" },
+        [pscustomobject]@{ Command = "dust";    WingetId = "bootandy.dust";            ChocoId = "du-dust"; ScoopId = "dust"    },
+        [pscustomobject]@{ Command = "procs";   WingetId = "dalance.procs";            ChocoId = "procs";   ScoopId = "procs"   },
+        [pscustomobject]@{ Command = "btm";     WingetId = "ClementTsang.bottom";      ChocoId = "bottom";  ScoopId = "bottom"  },
+        [pscustomobject]@{ Command = "curlie";  WingetId = "rs.curlie";                ChocoId = "curlie";  ScoopId = "curlie"  },
+        [pscustomobject]@{ Command = "http";    WingetId = "httpie.httpie";            ChocoId = "httpie";  ScoopId = "httpie"  }
     )
 }
 
@@ -459,18 +500,30 @@ function Write-OptionalToolState([object[]]$Records) {
     $statePath = Get-OptionalToolsStatePath
     $stateDir = Split-Path -Parent $statePath
     if ($stateDir -and -not (Test-Path $stateDir)) {
-        New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+        if ($script:DryRun) {
+            Write-Host "[DRYRUN] New-Item -ItemType Directory -Path '$stateDir'" -ForegroundColor DarkGray
+        } else {
+            New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+        }
     }
 
     if (-not $Records -or $Records.Count -eq 0) {
         if (Test-Path $statePath) {
-            Remove-Item -Path $statePath -Force -ErrorAction SilentlyContinue
+            if ($script:DryRun) {
+                Write-Host "[DRYRUN] Remove-Item -Path '$statePath'" -ForegroundColor DarkGray
+            } else {
+                Remove-Item -Path $statePath -Force -ErrorAction SilentlyContinue
+            }
         }
         return
     }
 
     $json = $Records | ConvertTo-Json -Depth 6
-    Set-Content -Path $statePath -Value $json -Encoding UTF8
+    if ($script:DryRun) {
+        Write-Host "[DRYRUN] Set-Content '$statePath' (JSON data)" -ForegroundColor DarkGray
+    } else {
+        Set-Content -Path $statePath -Value $json -Encoding UTF8
+    }
 }
 
 function Install-MissingOptionalTools([object[]]$Catalog) {
@@ -499,7 +552,12 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
         if ($wingetAvailable -and $tool.WingetId) {
             $attempted += "winget"
             Write-Host "  [INFO] Installing $commandName via winget ($($tool.WingetId))..." -ForegroundColor DarkGray
-            & winget install --id $tool.WingetId --exact --source winget --accept-package-agreements --accept-source-agreements
+            if ($script:DryRun) {
+                Write-Host "[DRYRUN] winget install --id $($tool.WingetId) ..." -ForegroundColor DarkGray
+                $LASTEXITCODE = 0
+            } else {
+                & winget install --id $tool.WingetId --exact --source winget --accept-package-agreements --accept-source-agreements
+            }
             if ($LASTEXITCODE -eq 0) {
                 $installed = $true
                 $managerUsed = "winget"
@@ -510,7 +568,12 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
         if (-not $installed -and $scoopAvailable -and $tool.ScoopId) {
             $attempted += "scoop"
             Write-Host "  [INFO] Installing $commandName via scoop ($($tool.ScoopId))..." -ForegroundColor DarkGray
-            & scoop install $tool.ScoopId
+            if ($script:DryRun) {
+                Write-Host "[DRYRUN] scoop install $($tool.ScoopId)" -ForegroundColor DarkGray
+                $LASTEXITCODE = 0
+            } else {
+                & scoop install $tool.ScoopId
+            }
             if ($LASTEXITCODE -eq 0) {
                 $installed = $true
                 $managerUsed = "scoop"
@@ -521,7 +584,12 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
         if (-not $installed -and $chocoAvailable -and $tool.ChocoId) {
             $attempted += "choco"
             Write-Host "  [INFO] Installing $commandName via choco ($($tool.ChocoId))..." -ForegroundColor DarkGray
-            & choco install $tool.ChocoId -y
+            if ($script:DryRun) {
+                Write-Host "[DRYRUN] choco install $($tool.ChocoId) -y" -ForegroundColor DarkGray
+                $LASTEXITCODE = 0
+            } else {
+                & choco install $tool.ChocoId -y
+            }
             if ($LASTEXITCODE -eq 0) {
                 $installed = $true
                 $managerUsed = "choco"
@@ -588,7 +656,12 @@ function Uninstall-TrackedOptionalTools {
                     break
                 }
                 Write-Host "  [INFO] Uninstalling optional tool: $commandName via winget ($packageId)..." -ForegroundColor DarkGray
-                & winget uninstall --id $packageId --exact --source winget --accept-source-agreements
+                if ($script:DryRun) {
+                    Write-Host "[DRYRUN] winget uninstall --id $packageId ..." -ForegroundColor DarkGray
+                    $LASTEXITCODE = 0
+                } else {
+                    & winget uninstall --id $packageId --exact --source winget --accept-source-agreements
+                }
                 $ok = ($LASTEXITCODE -eq 0)
                 break
             }
@@ -597,7 +670,12 @@ function Uninstall-TrackedOptionalTools {
                     break
                 }
                 Write-Host "  [INFO] Uninstalling optional tool: $commandName via choco ($packageId)..." -ForegroundColor DarkGray
-                & choco uninstall $packageId -y
+                if ($script:DryRun) {
+                    Write-Host "[DRYRUN] choco uninstall $packageId -y" -ForegroundColor DarkGray
+                    $LASTEXITCODE = 0
+                } else {
+                    & choco uninstall $packageId -y
+                }
                 $ok = ($LASTEXITCODE -eq 0)
                 break
             }
@@ -606,7 +684,12 @@ function Uninstall-TrackedOptionalTools {
                     break
                 }
                 Write-Host "  [INFO] Uninstalling optional tool: $commandName via scoop ($packageId)..." -ForegroundColor DarkGray
-                & scoop uninstall $packageId
+                if ($script:DryRun) {
+                    Write-Host "[DRYRUN] scoop uninstall $packageId" -ForegroundColor DarkGray
+                    $LASTEXITCODE = 0
+                } else {
+                    & scoop uninstall $packageId
+                }
                 $ok = ($LASTEXITCODE -eq 0)
                 break
             }
@@ -684,7 +767,11 @@ function Backup-ProfileFile {
 
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $backup = "$ProfilePath.bak-$stamp"
-    Copy-Item -Path $ProfilePath -Destination $backup -Force
+    if ($script:DryRun) {
+        Write-Host "[DRYRUN] Backup-ProfileFile: $ProfilePath -> $backup" -ForegroundColor DarkGray
+    } else {
+        Copy-Item -Path $ProfilePath -Destination $backup -Force
+    }
     $script:ProfileBackupPath = $backup
     return $backup
 }
@@ -699,10 +786,18 @@ function Upsert-ProfileBlock {
 
     $profileDir = Split-Path -Parent $ProfilePath
     if ($profileDir -and -not (Test-Path $profileDir)) {
-        New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+        if ($script:DryRun) {
+            Write-Host "[DRYRUN] New-Item -ItemType Directory -Path '$profileDir'" -ForegroundColor DarkGray
+        } else {
+            New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+        }
     }
     if (-not (Test-Path $ProfilePath)) {
-        New-Item -ItemType File -Path $ProfilePath -Force | Out-Null
+        if ($script:DryRun) {
+            Write-Host "[DRYRUN] New-Item -ItemType File -Path '$ProfilePath'" -ForegroundColor DarkGray
+        } else {
+            New-Item -ItemType File -Path $ProfilePath -Force | Out-Null
+        }
     }
 
     $existing = Get-Content -Path $ProfilePath -Raw -ErrorAction SilentlyContinue
@@ -730,7 +825,11 @@ function Upsert-ProfileBlock {
     }
     $updated += $newBlock
 
-    Set-Content -Path $ProfilePath -Value $updated -Encoding UTF8
+    if ($script:DryRun) {
+        Write-Host "[DRYRUN] Set-Content '$ProfilePath' (updated profile block)" -ForegroundColor DarkGray
+    } else {
+        Set-Content -Path $ProfilePath -Value $updated -Encoding UTF8
+    }
 }
 
 function Remove-ProfileBlock {
@@ -755,7 +854,11 @@ function Remove-ProfileBlock {
     $updated = [regex]::Replace($updated, $endLinePattern, "")
 
     if ($updated -ne $existing) {
-        Set-Content -Path $ProfilePath -Value $updated -Encoding UTF8
+        if ($script:DryRun) {
+            Write-Host "[DRYRUN] Set-Content '$ProfilePath' (removed profile block)" -ForegroundColor DarkGray
+        } else {
+            Set-Content -Path $ProfilePath -Value $updated -Encoding UTF8
+        }
     }
 }
 
@@ -787,7 +890,11 @@ function Remove-ManagedProfileBlocks {
     if ($updated.Length -gt 0 -and -not $updated.EndsWith("`r`n")) {
         $updated += "`r`n"
     }
-    Set-Content -Path $ProfilePath -Value $updated -Encoding UTF8
+    if ($script:DryRun) {
+        Write-Host "[DRYRUN] Set-Content '$ProfilePath' (removed managed blocks)" -ForegroundColor DarkGray
+    } else {
+        Set-Content -Path $ProfilePath -Value $updated -Encoding UTF8
+    }
 }
 
 function Remove-InstalledProfileShims {
@@ -2242,8 +2349,13 @@ if ($Uninstall) {
         }
         if (Test-Path $sd -PathType Container) {
             if ($PSCmdlet.ShouldProcess($sd, "Delete generated .cmd shims")) {
-                Get-ChildItem $sd -Filter *.cmd -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-                try { Remove-Item $sd -Force -ErrorAction Stop } catch { }
+                if ($script:DryRun) {
+                    Write-Host "[DRYRUN] Get-ChildItem '$sd' -Filter *.cmd | Remove-Item -Force" -ForegroundColor DarkGray
+                    Write-Host "[DRYRUN] Remove-Item '$sd' -Force" -ForegroundColor DarkGray
+                } else {
+                    Get-ChildItem $sd -Filter *.cmd -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+                    try { Remove-Item $sd -Force -ErrorAction Stop } catch { }
+                }
                 $didChange = $true
                 Write-Host "[OK] Removed shim files from: $sd" -ForegroundColor Green
             }
@@ -2340,7 +2452,11 @@ if ($CreateShims) {
         New-DirectoryIfMissing $shimDir
 
         # Clear stale shims (avoid dead shims after Git upgrades)
-        Get-ChildItem $shimDir -Filter *.cmd -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        if ($script:DryRun) {
+             Write-Host "[DRYRUN] Get-ChildItem '$shimDir' -Filter *.cmd | Remove-Item -Force" -ForegroundColor DarkGray
+        } else {
+             Get-ChildItem $shimDir -Filter *.cmd -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        }
 
         # Coverage baseline expanded from common Unix/Linux command references.
         $toolsToShim = @(
