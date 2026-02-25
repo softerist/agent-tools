@@ -406,6 +406,64 @@ function Get-OptionalToolCatalog {
         [pscustomobject]@{ Command = "curlie";  WingetId = "rs.curlie";                ChocoId = "curlie";  ScoopId = "curlie"  }    )
 }
 
+function Get-CoreShimToolCatalog {
+    return @(
+        # Text search & processing
+        "grep", "egrep", "fgrep", "sed", "awk", "gawk",
+        "apropos", "aspell",
+
+        # File ops (NOTE: rd shim won't override CMD/PowerShell built-in)
+        "find", "cat", "cp", "mv", "rm", "rmdir", "touch", "ln", "ls",
+        "pwd", "basename", "dirname", "realpath", "file", "which", "vdir", "link", "rename",
+        "chmod", "chown", "chgrp", "stat", "install", "mktemp", "setfacl", "getfacl",
+        "readlink", "truncate",
+
+        # Text manipulation
+        "sort", "uniq", "tr", "cut", "paste", "join", "comm", "split",
+        "fmt", "fold", "expand", "unexpand", "strings", "nl",
+        "shuf", "csplit", "tsort", "numfmt", "column",
+
+        # File viewing
+        "less", "more", "head", "tail", "tac", "rev", "od", "xxd",
+
+        # Comparison
+        "diff", "diff3", "cmp", "patch", "sdiff",
+
+        # Compression / archives
+        "tar", "gzip", "gunzip", "zip", "unzip", "bzip2", "bunzip2", "xz", "unxz", "cpio",
+
+        # Stream processing
+        "xargs", "tee", "wc", "iconv", "pv",
+
+        # Utilities
+        "env", "expr", "seq", "yes", "base32", "base64", "printf", "echo", "test", "true", "false",
+        "bc", "cal", "cksum", "sum", "sync", "tput", "pr", "at",
+        "tty", "nproc", "timeout", "factor", "stdbuf", "printenv",
+        "dircolors", "pathchk", "mkfifo", "users", "logname", "groups",
+        "date", "sleep", "time", "uname", "hostname", "whoami", "id", "who", "w", "last",
+        "md5sum", "sha1sum", "sha256sum",
+        "df", "du", "dd", "man", "whereis", "locate", "updatedb", "crontab",
+        "ps", "top", "kill", "killall", "pkill", "pgrep", "nice", "renice", "nohup",
+        "free", "uptime", "vmstat", "dmesg", "lsof", "htop", "watch",
+        "sudo", "su",
+
+        # Network
+        "curl", "wget", "ping", "traceroute", "nslookup", "dig", "host", "whois",
+        "netstat", "ss", "ifconfig", "ip", "route", "arp", "ncat",
+        "ssh", "ssh-keygen", "ssh-agent", "ssh-add", "scp", "sftp", "ftp", "telnet", "rsync", "nc",
+        "open", "xdg-open",
+
+        # Shells
+        "bash", "sh", "perl", "make",
+
+        # Editors
+        "nano", "vi", "vim", "dos2unix", "unix2dos",
+
+        # Security / crypto
+        "openssl", "gpg"
+    )
+}
+
 function Ensure-OptionalPackageManagers {
     $wingetAvailable = [bool](Get-Command winget -ErrorAction SilentlyContinue)
     $scoopAvailable  = [bool](Get-Command scoop  -ErrorAction SilentlyContinue)
@@ -921,6 +979,25 @@ function Install-ProfileMissingShims {
     $legacyStart = "# >>> git-tools-missing-shims >>>"
     $legacyEnd   = "# <<< git-tools-missing-shims <<<"
 
+    $allFallbackToolNames = @(
+        (Get-CoreShimToolCatalog)
+        (Get-OptionalToolCatalog | ForEach-Object { $_.Command })
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique
+    $allFallbackLiteral = ($allFallbackToolNames | ForEach-Object { "    '{0}'" -f $_ }) -join [Environment]::NewLine
+    $genericFallbackBlock = @'
+$__unixGenericFallbackTools = @(
+__UNIX_GENERIC_FALLBACK_TOOL_NAMES__
+)
+
+foreach ($toolName in $__unixGenericFallbackTools) {
+    Add-UnixShimIfMissing -Name $toolName -Body {
+        $commandName = $MyInvocation.MyCommand.Name
+        throw "$commandName: fallback unavailable. Install the executable to use this command."
+    }
+}
+'@
+    $genericFallbackBlock = $genericFallbackBlock.Replace("__UNIX_GENERIC_FALLBACK_TOOL_NAMES__", $allFallbackLiteral)
+
     $blockBody = @'
 # Add Unix-style shims only when a command is missing.
 # This avoids overriding Git-for-Windows or third-party tools already on PATH.
@@ -932,13 +1009,23 @@ function Add-UnixShimIfMissing {
         [scriptblock]$Body
     )
 
+    $app = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($app) {
+        # Keep wrappers as true fallbacks by removing managed aliases/functions when a real executable exists.
+        Remove-Item ("Alias:" + $Name) -Force -ErrorAction SilentlyContinue
+        Remove-Item ("Alias:Global:" + $Name) -Force -ErrorAction SilentlyContinue
+        Remove-Item ("Function:" + $Name) -Force -ErrorAction SilentlyContinue
+        Remove-Item ("Function:Global:" + $Name) -Force -ErrorAction SilentlyContinue
+        return
+    }
+
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
         Set-Item -Path ("Function:\Global:" + $Name) -Value $Body
     }
 }
 
 Add-UnixShimIfMissing -Name "export" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Assignments)
+    $Assignments = @($args)
     foreach ($item in $Assignments) {
         $parts = $item -split "=", 2
         if ($parts.Count -ne 2 -or [string]::IsNullOrWhiteSpace($parts[0])) {
@@ -967,7 +1054,7 @@ Add-UnixShimIfMissing -Name "rev" -Body {
 }
 
 Add-UnixShimIfMissing -Name "unset" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Names)
+    $Names = @($args)
     foreach ($name in $Names) {
         if (-not [string]::IsNullOrWhiteSpace($name)) {
             Remove-Item -Path ("Env:" + $name) -ErrorAction SilentlyContinue
@@ -976,7 +1063,7 @@ Add-UnixShimIfMissing -Name "unset" -Body {
 }
 
 Add-UnixShimIfMissing -Name "mkdirp" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Paths)
+    $Paths = @($args)
     foreach ($path in $Paths) {
         if (-not [string]::IsNullOrWhiteSpace($path)) {
             New-Item -ItemType Directory -Path $path -Force | Out-Null
@@ -985,8 +1072,8 @@ Add-UnixShimIfMissing -Name "mkdirp" -Body {
 }
 
 Add-UnixShimIfMissing -Name "ll" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
-    Get-ChildItem -Force @Args
+    $ArgList = @($args)
+    Get-ChildItem -Force @ArgList
 }
 
 Add-UnixShimIfMissing -Name "clear-hist" -Body {
@@ -1005,7 +1092,7 @@ Add-UnixShimIfMissing -Name "pwd" -Body {
 }
 
 Add-UnixShimIfMissing -Name "history" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $items = Get-History
     if ($ArgList.Count -gt 0) {
         $count = 0
@@ -1018,7 +1105,7 @@ Add-UnixShimIfMissing -Name "history" -Body {
 }
 
 Add-UnixShimIfMissing -Name "touch" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Paths)
+    $Paths = @($args)
     foreach ($path in $Paths) {
         if ([string]::IsNullOrWhiteSpace($path)) { continue }
         if (Test-Path -Path $path) {
@@ -1030,7 +1117,7 @@ Add-UnixShimIfMissing -Name "touch" -Body {
 }
 
 Add-UnixShimIfMissing -Name "head" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $count = 10
     $paths = @()
     $i = 0
@@ -1054,7 +1141,7 @@ Add-UnixShimIfMissing -Name "head" -Body {
 }
 
 Add-UnixShimIfMissing -Name "tail" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $count = 10
     $follow = $false
     $paths = @()
@@ -1081,7 +1168,7 @@ Add-UnixShimIfMissing -Name "tail" -Body {
 }
 
 Add-UnixShimIfMissing -Name "wc" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $linesOnly = $false
     $wordsOnly = $false
     $files = @()
@@ -1174,17 +1261,17 @@ function Invoke-GrepShim {
 }
 
 Add-UnixShimIfMissing -Name "grep" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     Invoke-GrepShim -ArgList $ArgList -InputItems @($input)
 }
 
 Add-UnixShimIfMissing -Name "egrep" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     Invoke-GrepShim -ArgList $ArgList -InputItems @($input)
 }
 
 Add-UnixShimIfMissing -Name "fgrep" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     Invoke-GrepShim -ArgList $ArgList -InputItems @($input) -SimpleMatch
 }
 
@@ -1201,14 +1288,137 @@ Add-UnixShimIfMissing -Name "rgf" -Body {
     }
     & $rg.Source -n -F -- $Pattern @Rest
 }
-Add-UnixShimIfMissing -Name "rgs" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
-    $rg = Get-Command rg -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $rg) {
-        throw "rgs: ripgrep 'rg' not found. Install with -InstallOptionalTools or winget install --id BurntSushi.ripgrep.MSVC --exact."
+function Invoke-RgFallback {
+    param(
+        [object[]]$ArgList,
+        [object[]]$InputItems
+    )
+
+    $patterns = New-Object System.Collections.Generic.List[string]
+    $paths = New-Object System.Collections.Generic.List[string]
+    $ignoreCase = $false
+    $lineNumber = $false
+    $invert = $false
+    $simpleMatch = $false
+    $recursive = $true
+
+    $i = 0
+    while ($i -lt $ArgList.Count) {
+        $a = [string]$ArgList[$i]
+
+        if ($a -eq "--") {
+            if ($i + 1 -lt $ArgList.Count) {
+                for ($j = $i + 1; $j -lt $ArgList.Count; $j++) {
+                    $paths.Add([string]$ArgList[$j]) | Out-Null
+                }
+            }
+            break
+        }
+
+        if ($a -eq "-e") {
+            if ($i + 1 -ge $ArgList.Count) { throw "rg fallback: -e requires a pattern value" }
+            $patterns.Add([string]$ArgList[$i + 1]) | Out-Null
+            $i += 2
+            continue
+        }
+
+        if ($a.StartsWith("-e") -and $a.Length -gt 2) {
+            $patterns.Add($a.Substring(2)) | Out-Null
+            $i++
+            continue
+        }
+
+        switch ($a) {
+            "-n"            { $lineNumber = $true; $i++; continue }
+            "--line-number" { $lineNumber = $true; $i++; continue }
+            "-i"            { $ignoreCase = $true; $i++; continue }
+            "--ignore-case" { $ignoreCase = $true; $i++; continue }
+            "-S"            { $i++; continue } # Smart-case is a no-op in this fallback.
+            "--smart-case"  { $i++; continue }
+            "-F"            { $simpleMatch = $true; $i++; continue }
+            "--fixed-strings" { $simpleMatch = $true; $i++; continue }
+            "-v"            { $invert = $true; $i++; continue }
+            "--invert-match" { $invert = $true; $i++; continue }
+            "-r"            { $recursive = $true; $i++; continue }
+            "-R"            { $recursive = $true; $i++; continue }
+        }
+
+        if ($a.StartsWith("--")) {
+            throw "rg fallback: unsupported option $a (supports -e, -n, -i, -S, -F, -v, -r, -R). Install ripgrep for full support."
+        }
+
+        if ($a -match '^-[A-Za-z]+$') {
+            $unsupported = @()
+            foreach ($ch in $a.Substring(1).ToCharArray()) {
+                switch ($ch) {
+                    'n' { $lineNumber = $true; break }
+                    'i' { $ignoreCase = $true; break }
+                    'S' { break }
+                    'F' { $simpleMatch = $true; break }
+                    'v' { $invert = $true; break }
+                    'r' { $recursive = $true; break }
+                    'R' { $recursive = $true; break }
+                    default { $unsupported += "-$ch"; break }
+                }
+            }
+            if ($unsupported.Count -gt 0) {
+                throw "rg fallback: unsupported option(s) $($unsupported -join ', ') (supports -e, -n, -i, -S, -F, -v, -r, -R). Install ripgrep for full support."
+            }
+            $i++
+            continue
+        }
+
+        if ($patterns.Count -eq 0) {
+            $patterns.Add($a) | Out-Null
+        } else {
+            $paths.Add($a) | Out-Null
+        }
+        $i++
     }
 
-    $output = & $rg.Source @ArgList 2>&1
+    if ($patterns.Count -eq 0) {
+        throw "usage: rg [-n] [-S] [-i] [-F] [-v] [-e PATTERN ...] [PATTERN] [path ...]"
+    }
+
+    $caseSensitive = -not $ignoreCase
+    $result = $null
+
+    if ($paths.Count -gt 0) {
+        $targets = @()
+        foreach ($p in $paths) {
+            if (Test-Path -Path $p -PathType Container) {
+                $targets += (Join-Path $p "*")
+            } else {
+                $targets += $p
+            }
+        }
+        $result = Select-String -Pattern @($patterns) -Path $targets -Recurse:$recursive -SimpleMatch:$simpleMatch -CaseSensitive:$caseSensitive -NotMatch:$invert -ErrorAction SilentlyContinue
+    } elseif ($InputItems -and $InputItems.Count -gt 0) {
+        $result = $InputItems | Select-String -Pattern @($patterns) -SimpleMatch:$simpleMatch -CaseSensitive:$caseSensitive -NotMatch:$invert
+    } else {
+        $result = Select-String -Pattern @($patterns) -Path @(".\*") -Recurse:$true -SimpleMatch:$simpleMatch -CaseSensitive:$caseSensitive -NotMatch:$invert -ErrorAction SilentlyContinue
+    }
+
+    if ($lineNumber) {
+        $result | ForEach-Object { "{0}:{1}:{2}" -f $_.Path, $_.LineNumber, $_.Line }
+    } else {
+        $result
+    }
+}
+Add-UnixShimIfMissing -Name "rgs" -Body {
+    $ArgList = @($args)
+    $stdinItems = @($input)
+    $rg = Get-Command rg -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $rg) {
+        Invoke-RgFallback -ArgList $ArgList -InputItems $stdinItems
+        return
+    }
+
+    if ($stdinItems.Count -gt 0) {
+        $output = $stdinItems | & $rg.Source @ArgList 2>&1
+    } else {
+        $output = & $rg.Source @ArgList 2>&1
+    }
     $exit = $LASTEXITCODE
     if ($exit -eq 0) {
         $output
@@ -1250,12 +1460,23 @@ Add-UnixShimIfMissing -Name "rgs" -Body {
 if (-not (Get-Command rgl -ErrorAction SilentlyContinue)) {
     Set-Alias -Name rgl -Value rgf -Scope Global
 }
-if (Get-Command rg -CommandType Application -ErrorAction SilentlyContinue) {
-    Set-Alias -Name rg -Value rgs -Scope Global -Force
+Add-UnixShimIfMissing -Name "rg" -Body {
+    $ArgList = @($args)
+    $stdinItems = @($input)
+    $rgExe = Get-Command rg -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($rgExe) {
+        if ($stdinItems.Count -gt 0) {
+            $stdinItems | & $rgExe.Source @ArgList
+        } else {
+            & $rgExe.Source @ArgList
+        }
+        return
+    }
+    Invoke-RgFallback -ArgList $ArgList -InputItems $stdinItems
 }
 
 Add-UnixShimIfMissing -Name "nc" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $ncat = Get-Command ncat -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $ncat) {
         throw "nc: command not found. Install ncat (winget install --id Insecure.Nmap --exact) or run Enable-UnixToolsSystemWide.ps1 -InstallOptionalTools."
@@ -1264,7 +1485,7 @@ Add-UnixShimIfMissing -Name "nc" -Body {
 }
 
 Add-UnixShimIfMissing -Name "which" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Names)
+    $Names = @($args)
     foreach ($name in $Names) {
         $cmd = Get-Command $name -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($cmd) {
@@ -1276,13 +1497,13 @@ Add-UnixShimIfMissing -Name "which" -Body {
 }
 
 Add-UnixShimIfMissing -Name "man" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     if ($ArgList.Count -eq 0) { throw "usage: man <command>" }
     Get-Help $ArgList[0] -Full
 }
 
 Add-UnixShimIfMissing -Name "source" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     if ($ArgList.Count -eq 0) { throw "usage: source <script> [args...]" }
     $path = $ArgList[0]
     $rest = @()
@@ -1291,7 +1512,7 @@ Add-UnixShimIfMissing -Name "source" -Body {
 }
 
 Add-UnixShimIfMissing -Name "apropos" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     if ($ArgList.Count -eq 0) { throw "usage: apropos <keyword>" }
     $pattern = "*" + (($ArgList -join " ").Trim()) + "*"
     Get-Help $pattern -ErrorAction SilentlyContinue |
@@ -1300,7 +1521,7 @@ Add-UnixShimIfMissing -Name "apropos" -Body {
 }
 
 Add-UnixShimIfMissing -Name "make" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $alt = @("mingw32-make", "nmake")
     foreach ($name in $alt) {
         $cmd = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -1313,7 +1534,7 @@ Add-UnixShimIfMissing -Name "make" -Body {
 }
 
 Add-UnixShimIfMissing -Name "open" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     if ($ArgList.Count -eq 0) {
         Start-Process -FilePath "."
         return
@@ -1324,12 +1545,12 @@ Add-UnixShimIfMissing -Name "open" -Body {
 }
 
 Add-UnixShimIfMissing -Name "xdg-open" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     open @ArgList
 }
 
 Add-UnixShimIfMissing -Name "rename" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     if ($ArgList.Count -ne 2) { throw "usage: rename <old-path> <new-name|new-path>" }
     $oldPath = $ArgList[0]
     $newSpec = $ArgList[1]
@@ -1341,7 +1562,7 @@ Add-UnixShimIfMissing -Name "rename" -Body {
 }
 
 Add-UnixShimIfMissing -Name "dos2unix" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     if ($ArgList.Count -eq 0) { throw "usage: dos2unix <file...>" }
     foreach ($path in $ArgList) {
         $text = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
@@ -1351,7 +1572,7 @@ Add-UnixShimIfMissing -Name "dos2unix" -Body {
 }
 
 Add-UnixShimIfMissing -Name "unix2dos" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     if ($ArgList.Count -eq 0) { throw "usage: unix2dos <file...>" }
     foreach ($path in $ArgList) {
         $text = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
@@ -1362,18 +1583,18 @@ Add-UnixShimIfMissing -Name "unix2dos" -Body {
 }
 
 Add-UnixShimIfMissing -Name "vdir" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     Get-ChildItem -Force @ArgList | Format-Table Mode, LastWriteTime, Length, Name -AutoSize
 }
 
 Add-UnixShimIfMissing -Name "link" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     if ($ArgList.Count -ne 2) { throw "usage: link <target> <linkpath>" }
     New-Item -ItemType HardLink -Path $ArgList[1] -Target $ArgList[0] -Force | Out-Null
 }
 
 Add-UnixShimIfMissing -Name "tput" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     if ($ArgList.Count -eq 0) { throw "usage: tput <clear|reset|cols|lines>" }
     switch ($ArgList[0]) {
         "clear" { Clear-Host; return }
@@ -1389,7 +1610,7 @@ Add-UnixShimIfMissing -Name "sync" -Body {
 }
 
 Add-UnixShimIfMissing -Name "at" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     if ($ArgList.Count -lt 2) { throw "usage: at HH:mm <command...>" }
     $time = $ArgList[0]
     if ($time -notmatch '^\d{1,2}:\d{2}$') { throw "at: time format must be HH:mm" }
@@ -1405,7 +1626,7 @@ Add-UnixShimIfMissing -Name "aspell" -Body {
 }
 
 Add-UnixShimIfMissing -Name "bc" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $expr = if ($ArgList.Count -gt 0) { $ArgList -join " " } else { ($input | Out-String).Trim() }
     if ([string]::IsNullOrWhiteSpace($expr)) { throw "usage: bc <expression>" }
     $table = New-Object System.Data.DataTable
@@ -1414,7 +1635,7 @@ Add-UnixShimIfMissing -Name "bc" -Body {
 }
 
 Add-UnixShimIfMissing -Name "base64" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $decode = $false
     $wrap = 76
     $files = @()
@@ -1465,7 +1686,7 @@ Add-UnixShimIfMissing -Name "base32" -Body {
 }
 
 Add-UnixShimIfMissing -Name "cksum" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
 
     function Get-Crc32Value {
         param([byte[]]$Bytes)
@@ -1500,13 +1721,13 @@ Add-UnixShimIfMissing -Name "cksum" -Body {
 }
 
 Add-UnixShimIfMissing -Name "sum" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     # Compatibility fallback: reuse cksum output format.
     cksum @ArgList
 }
 
 Add-UnixShimIfMissing -Name "pv" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $count = 0L
     $start = Get-Date
     foreach ($item in $input) {
@@ -1519,7 +1740,7 @@ Add-UnixShimIfMissing -Name "pv" -Body {
 }
 
 Add-UnixShimIfMissing -Name "pr" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     if ($ArgList.Count -eq 0) {
         $i = 1
         foreach ($line in $input) {
@@ -1543,7 +1764,7 @@ Add-UnixShimIfMissing -Name "cpio" -Body {
 }
 
 Add-UnixShimIfMissing -Name "cal" -Body {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $now = Get-Date
     $month = $now.Month
     $year = $now.Year
@@ -1564,7 +1785,10 @@ Add-UnixShimIfMissing -Name "cal" -Body {
     }
     if ($line.Trim().Length -gt 0) { $line.TrimEnd() }
 }
+
+__UNIX_GENERIC_FALLBACK_BLOCK__
 '@
+    $blockBody = $blockBody.Replace("__UNIX_GENERIC_FALLBACK_BLOCK__", $genericFallbackBlock)
 
     Remove-ProfileBlock -ProfilePath $profilePath -StartMarker $legacyStart -EndMarker $legacyEnd
     Upsert-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody
@@ -1673,8 +1897,8 @@ $script:UnixMissingShimCoverage = [ordered]@{
     fgrep      = [ordered]@{ CoveredFlags = "-i, -n, -v, -r, -R"; UnsupportedFlags = "Any other short/long option" }
     rgf        = [ordered]@{ CoveredFlags = "<pattern> [path ...] (fixed string, line numbers)"; UnsupportedFlags = "Delegated to rg executable" }
     rgl        = [ordered]@{ CoveredFlags = "Alias to rgf"; UnsupportedFlags = "Same as rgf" }
-    rgs        = [ordered]@{ CoveredFlags = "[rg args...] with auto '--' retry for unrecognized long-flag-like literal"; UnsupportedFlags = "Delegated to rg executable" }
-    rg         = [ordered]@{ CoveredFlags = "Alias to rgs (profile mode)"; UnsupportedFlags = "Same as rgs" }
+    rgs        = [ordered]@{ CoveredFlags = "[rg args...] passthrough to rg executable with Select-String fallback"; UnsupportedFlags = "Fallback mode supports -e, -n, -i, -S, -F, -v, -r, -R only" }
+    rg         = [ordered]@{ CoveredFlags = "Uses rg executable when present; fallback supports -e, -n, -i, -S, -F, -v, -r, -R"; UnsupportedFlags = "Fallback mode supports a subset of rg flags" }
     nc         = [ordered]@{ CoveredFlags = "[ncat-compatible args...]"; UnsupportedFlags = "Delegated to ncat when installed" }
     which      = [ordered]@{ CoveredFlags = "<command ...>"; UnsupportedFlags = "Any flag option" }
     man        = [ordered]@{ CoveredFlags = "<command>"; UnsupportedFlags = "Any flag option" }
@@ -1840,7 +2064,7 @@ function Show-UnixCoverageReport {
 }
 
 Set-UnixCommand -Name "rm" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $recurse = $false
     $force = $false
     $paths = @()
@@ -1872,7 +2096,7 @@ Set-UnixCommand -Name "rm" -Fallback {
 }
 
 Set-UnixCommand -Name "cp" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $recurse = $false
     $force = $false
     $noClobber = $false
@@ -1921,7 +2145,7 @@ Set-UnixCommand -Name "cp" -Fallback {
 }
 
 Set-UnixCommand -Name "mv" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $force = $false
     $noClobber = $false
     $items = @()
@@ -1966,7 +2190,7 @@ Set-UnixCommand -Name "mv" -Fallback {
 }
 
 Set-UnixCommand -Name "mkdir" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $p = $false
     $verbose = $false
     $paths = @()
@@ -2000,7 +2224,7 @@ Set-UnixCommand -Name "mkdir" -Fallback {
 }
 
 Set-UnixCommand -Name "ls" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $all = $false
     $long = $false
     $sortTime = $false
@@ -2063,7 +2287,7 @@ Set-UnixCommand -Name "ls" -Fallback {
 }
 
 Set-UnixCommand -Name "cat" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $number = $false
     $squeezeBlank = $false
     $paths = @()
@@ -2111,7 +2335,7 @@ Set-UnixCommand -Name "cat" -Fallback {
 }
 
 Set-UnixCommand -Name "sort" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $unique = $false
     $descending = $false
     $numeric = $false
@@ -2157,7 +2381,7 @@ Set-UnixCommand -Name "sort" -Fallback {
 }
 
 Set-UnixCommand -Name "diff" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $files = @()
     $brief = $false
     $parseOptions = $true
@@ -2192,7 +2416,7 @@ Set-UnixCommand -Name "diff" -Fallback {
 }
 
 Set-UnixCommand -Name "tee" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     $append = $false
     $ignoreInterrupt = $false
     $files = @()
@@ -2229,7 +2453,7 @@ Set-UnixCommand -Name "tee" -Fallback {
 }
 
 Set-UnixCommand -Name "sleep" -Fallback {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgList)
+    $ArgList = @($args)
     if ($ArgList.Count -eq 0) { throw "usage: sleep <seconds>" }
     if ($ArgList[0].StartsWith("-")) {
         Show-UnsupportedFlag -Command "sleep" -Flag $ArgList[0] -SupportedFlags "NUMBER[s|m|h|d]" -Usage "sleep <seconds>|<number>[s|m|h|d]"
@@ -2457,61 +2681,7 @@ if ($CreateShims) {
         }
 
         # Coverage baseline expanded from common Unix/Linux command references.
-        $toolsToShim = @(
-            # Text search & processing
-            "grep", "egrep", "fgrep", "sed", "awk", "gawk",
-            "apropos", "aspell",
-
-            # File ops (NOTE: rd shim won't override CMD/PowerShell built-in)
-            "find", "cat", "cp", "mv", "rm", "rmdir", "touch", "ln", "ls",
-            "pwd", "basename", "dirname", "realpath", "file", "which", "vdir", "link", "rename",
-            "chmod", "chown", "chgrp", "stat", "install", "mktemp", "setfacl", "getfacl",
-            "readlink", "truncate",
-
-            # Text manipulation
-            "sort", "uniq", "tr", "cut", "paste", "join", "comm", "split",
-            "fmt", "fold", "expand", "unexpand", "strings", "nl",
-            "shuf", "csplit", "tsort", "numfmt", "column",
-
-            # File viewing
-            "less", "more", "head", "tail", "tac", "rev", "od", "xxd",
-
-            # Comparison
-            "diff", "diff3", "cmp", "patch", "sdiff",
-
-            # Compression / archives
-            "tar", "gzip", "gunzip", "zip", "unzip", "bzip2", "bunzip2", "xz", "unxz", "cpio",
-
-            # Stream processing
-            "xargs", "tee", "wc", "iconv", "pv",
-
-            # Utilities
-            "env", "expr", "seq", "yes", "base32", "base64", "printf", "echo", "test", "true", "false",
-            "bc", "cal", "cksum", "sum", "sync", "tput", "pr", "at",
-            "tty", "nproc", "timeout", "factor", "stdbuf", "printenv",
-            "dircolors", "pathchk", "mkfifo", "users", "logname", "groups",
-            "date", "sleep", "time", "uname", "hostname", "whoami", "id", "who", "w", "last",
-            "md5sum", "sha1sum", "sha256sum",
-            "df", "du", "dd", "man", "whereis", "locate", "updatedb", "crontab",
-            "ps", "top", "kill", "killall", "pkill", "pgrep", "nice", "renice", "nohup",
-            "free", "uptime", "vmstat", "dmesg", "lsof", "htop", "watch",
-            "sudo", "su",
-
-            # Network
-            "curl", "wget", "ping", "traceroute", "nslookup", "dig", "host", "whois",
-            "netstat", "ss", "ifconfig", "ip", "route", "arp", "ncat",
-            "ssh", "ssh-keygen", "ssh-agent", "ssh-add", "scp", "sftp", "ftp", "telnet", "rsync", "nc",
-            "open", "xdg-open",
-
-            # Shells
-            "bash", "sh", "perl", "make",
-
-            # Editors
-            "nano", "vi", "vim", "dos2unix", "unix2dos",
-
-            # Security / crypto
-            "openssl", "gpg"
-        )
+        $toolsToShim = Get-CoreShimToolCatalog
 
         # Optional third-party tools that may already be installed in PATH.
         $externalTools = @($optionalToolCatalog | ForEach-Object { $_.Command })
@@ -2681,7 +2851,7 @@ if ($CreateShims) {
     }
 }
 if ($InstallProfileShims) {
-    Write-Host "- Missing-command profile shims installed for: export, rev, unset, mkdirp, ll, clear-hist, clear, pwd, history, touch, head, tail, wc, grep, egrep, fgrep, rgf/rgl/rgs (and rg alias), nc, which, man, source, apropos, make, open, xdg-open, rename, dos2unix, unix2dos, vdir, link, tput, sync, at, aspell, bc, cal, base64, base32, cksum, sum, pv, pr, cpio" -ForegroundColor Cyan
+    Write-Host "- Missing-command profile shims installed for core wrappers (export, grep/rg, file/text helpers, alias compat) plus generic fallback stubs for every command in the shim catalog when executable is missing." -ForegroundColor Cyan
     Write-Host "- Alias-compat wrappers installed for common commands: rm, cp, mv, mkdir, ls, cat, sort, diff, tee, sleep" -ForegroundColor Cyan
     Write-Host "- Profile shims are idempotent and stored in marker blocks under your profile" -ForegroundColor Cyan
     Write-Host "- Coverage report command: Show-UnixCoverageReport -IncludeMissing" -ForegroundColor Cyan
