@@ -29,7 +29,7 @@
     alias-compat wrappers (rm, cp, mv, ls, cat, sort, diff, tee, sleep).
 
 .PARAMETER InstallOptionalTools
-    Install missing optional CLI tools (rg, fd, jq, yq, bat, eza, fzf, ag, ack, ncat)
+    Install missing optional CLI tools (rg, fd, jq, yq, bat, eza, fzf, ag, ack)
     using winget/choco/scoop when available.
 
 .PARAMETER InstallFull
@@ -105,7 +105,7 @@
 #   .\Enable-UnixToolsSystemWide.ps1 -InstallProfileShims -LogPath C:\Temp\unix-tools-install.log
 #   .\Enable-UnixToolsSystemWide.ps1 -Uninstall
 
-[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
 param(
     [switch]$CreateShims,
     [switch]$AddMingw,
@@ -124,15 +124,51 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$ScriptVersion = "2.1.1"
+$ScriptVersion = "2.1.2"
 $script:PathScope = if ($UserScope) { "User" } else { "Machine" }
 $script:PathDisplay = "$($script:PathScope) PATH"
+$script:DryRun = $DryRun.IsPresent
+
+# Ensure TLS 1.2+ for all web requests (older systems may default to TLS 1.0/1.1).
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+# Default to non-interactive behavior unless caller explicitly asks for confirmation.
+if (-not $PSBoundParameters.ContainsKey('Confirm')) {
+    $ConfirmPreference = 'None'
+}
 
 # ======================== Functions ========================
 
+function Invoke-NativeCommand {
+    <#
+    .SYNOPSIS
+        Runs a native executable and returns its exit code reliably.
+        Avoids stale $LASTEXITCODE from previous commands.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Command,
+        [Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments
+    )
+    & $Command @Arguments
+    return $LASTEXITCODE
+}
+
+function Backup-PathVariable {
+    param([string]$Scope = "Machine")
+    $current = [Environment]::GetEnvironmentVariable("Path", $Scope)
+    if ([string]::IsNullOrWhiteSpace($current)) { return }
+    $backupDir = Join-Path $env:ProgramData "UnixToolsSystemWide"
+    New-Item -ItemType Directory -Path $backupDir -Force -ErrorAction SilentlyContinue | Out-Null
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $file = Join-Path $backupDir "path-backup-$Scope-$stamp.txt"
+    Set-Content -Path $file -Value $current -Encoding UTF8
+    Write-Verbose "PATH backup saved: $file"
+    Write-Host "[INFO] PATH backup saved: $file" -ForegroundColor DarkGray
+}
+
 function Assert-Admin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $p  = New-Object Security.Principal.WindowsPrincipal($id)
+    $p = New-Object Security.Principal.WindowsPrincipal($id)
     if ($script:PathScope -eq "User") {
         if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
             Write-Warning "Running in UserScope mode (admin not required)."
@@ -146,6 +182,47 @@ function Assert-Admin {
         }
         throw "Please run PowerShell as Administrator, or use -UserScope."
     }
+}
+
+function Test-IsAdministrator {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $p = New-Object Security.Principal.WindowsPrincipal($id)
+    return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Ensure-ScoopCommandAvailable {
+    if (Get-Command scoop -ErrorAction SilentlyContinue) { return $true }
+    if ([string]::IsNullOrWhiteSpace($env:USERPROFILE)) { return $false }
+
+    $scoopCandidates = @(
+        (Join-Path $env:USERPROFILE "scoop\shims\scoop.cmd"),
+        (Join-Path $env:USERPROFILE "scoop\shims\scoop.ps1"),
+        (Join-Path $env:USERPROFILE "scoop\apps\scoop\current\bin\scoop.ps1")
+    ) | Where-Object { Test-Path $_ }
+
+    foreach ($candidate in $scoopCandidates) {
+        $dir = Split-Path -Parent $candidate
+        if ($dir) {
+            $parts = @($env:Path -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            $alreadyInPath = @(
+                $parts | Where-Object {
+                    $_.Trim().TrimEnd('\').Equals($dir.Trim().TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)
+                }
+            ).Count -gt 0
+            if (-not $alreadyInPath) {
+                $env:Path = "$dir;$env:Path"
+            }
+        }
+        try {
+            Set-Alias -Name scoop -Value $candidate -Scope Script -Force -ErrorAction SilentlyContinue
+        }
+        catch {
+            # Ignore alias registration issues; PATH update may be sufficient.
+        }
+        if (Get-Command scoop -ErrorAction SilentlyContinue) { return $true }
+    }
+
+    return $false
 }
 
 function Get-GitRoot {
@@ -167,7 +244,44 @@ function Get-GitRoot {
         }
     }
 
-    throw "Could not find Git installation. Install Git for Windows (winget install --id Git.Git -e) and re-run."
+    $cmd = Get-Command git -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source) {
+        $gitExe = [string]$cmd.Source
+        $gitDir = Split-Path -Parent $gitExe
+        $gitLeaf = (Split-Path -Leaf $gitDir).ToLowerInvariant()
+        if ($gitLeaf -eq "cmd" -or $gitLeaf -eq "bin") {
+            $rootFromCmd = Split-Path -Parent $gitDir
+            if ($rootFromCmd -and (Test-Path (Join-Path $rootFromCmd "usr\bin"))) {
+                return $rootFromCmd
+            }
+        }
+    }
+
+    $gitInstallHelp = @(
+        "Could not find a valid Git for Windows installation (expected usr\bin under Git root).",
+        "Install Git, then re-run this script:",
+        "  1) winget: winget install --id Git.Git --exact --source winget",
+        "  2) Download: https://git-scm.com/download/win",
+        "  3) PowerShell bootstrap (Chocolatey + Git):",
+        "     Set-ExecutionPolicy Bypass -Scope Process -Force;",
+        "     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072;",
+        "     irm https://community.chocolatey.org/install.ps1 | iex;",
+        "     choco install git -y"
+    ) -join [Environment]::NewLine
+
+    throw $gitInstallHelp
+}
+
+function Write-PackageManagerInstallGuidance {
+    Write-Host "  [INFO] Install one package manager, then re-run with -InstallOptionalTools." -ForegroundColor DarkGray
+    Write-Host "  [INFO] winget (App Installer): https://aka.ms/getwinget" -ForegroundColor DarkGray
+    Write-Host "  [INFO] Chocolatey via PowerShell (admin):" -ForegroundColor DarkGray
+    Write-Host "         Set-ExecutionPolicy Bypass -Scope Process -Force;" -ForegroundColor DarkGray
+    Write-Host "         [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072;" -ForegroundColor DarkGray
+    Write-Host "         irm https://community.chocolatey.org/install.ps1 | iex" -ForegroundColor DarkGray
+    Write-Host "  [INFO] Scoop via PowerShell (user scope):" -ForegroundColor DarkGray
+    Write-Host "         Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force;" -ForegroundColor DarkGray
+    Write-Host "         irm https://get.scoop.sh | iex" -ForegroundColor DarkGray
 }
 
 function Assert-PathLength([string]$PathValue, [string]$Scope = "Machine") {
@@ -203,7 +317,8 @@ function Add-MachinePathPrepend([string]$pathToPrepend) {
     Assert-PathLength -PathValue $newPath -Scope $scope
     if ($script:DryRun) {
         Write-Host "[DRYRUN] [Environment]::SetEnvironmentVariable('Path', '...len=$($newPath.Length)...', '$scope')" -ForegroundColor DarkGray
-    } else {
+    }
+    else {
         [Environment]::SetEnvironmentVariable("Path", $newPath, $scope)
     }
 }
@@ -235,7 +350,8 @@ function Add-MachinePathEntries([string[]]$pathsToAdd) {
         Assert-PathLength -PathValue $newPath -Scope $scope
         if ($script:DryRun) {
             Write-Host "[DRYRUN] [Environment]::SetEnvironmentVariable('Path', '...len=$($newPath.Length)...', '$scope')" -ForegroundColor DarkGray
-        } else {
+        }
+        else {
             [Environment]::SetEnvironmentVariable("Path", $newPath, $scope)
         }
     }
@@ -267,7 +383,8 @@ function Remove-MachinePathEntries([string[]]$pathsToRemove) {
     Assert-PathLength -PathValue $newPath -Scope $scope
     if ($script:DryRun) {
         Write-Host "[DRYRUN] [Environment]::SetEnvironmentVariable('Path', '...len=$($newPath.Length)...', '$scope')" -ForegroundColor DarkGray
-    } else {
+    }
+    else {
         [Environment]::SetEnvironmentVariable("Path", $newPath, $scope)
     }
     return $true
@@ -292,18 +409,21 @@ function Update-MachinePathEntries {
     Assert-PathLength -PathValue $newPath -Scope $scope
     if ($script:DryRun) {
         Write-Host "[DRYRUN] [Environment]::SetEnvironmentVariable('Path', '...len=$($newPath.Length)...', '$scope')" -ForegroundColor DarkGray
-    } else {
+    }
+    else {
         [Environment]::SetEnvironmentVariable("Path", $newPath, $scope)
     }
 }
 
 function New-DirectoryIfMissing([string]$dir) {
-    if (-not (Test-Path $dir)) {
-        if ($script:DryRun) {
+    if ($script:DryRun) {
+        if (-not (Test-Path $dir)) {
             Write-Host "[DRYRUN] New-Item -ItemType Directory -Path '$dir'" -ForegroundColor DarkGray
-        } else {
-            New-Item -ItemType Directory -Path $dir | Out-Null
         }
+    }
+    else {
+        # Use -Force for idempotent creation; eliminates TOCTOU race between Test-Path and New-Item.
+        New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
     }
 }
 
@@ -322,7 +442,7 @@ function Write-ShimCmd([string]$shimDir, [string]$name, [string]$targetExePath) 
         Write-Host "[DRYRUN] Set-Content '$shimPath' (Create shim for $name -> $targetExePath)" -ForegroundColor DarkGray
         return $true
     }
-    Set-Content -Path $shimPath -Value $content -Encoding ASCII
+    Set-Content -Path $shimPath -Value $content -Encoding ASCII -Force
     return $true
 }
 
@@ -354,7 +474,8 @@ function Find-ToolInPath([string]$toolName, [string]$excludeDir = $null, [hashta
             }
             return $src
         }
-    } catch {}
+    }
+    catch { Write-Verbose "Ignored error in Find-ToolInPath: $($_.Exception.Message)" }
     return $null
 }
 
@@ -377,33 +498,30 @@ function Get-ApplicationCommandIndex([string]$excludeDir = $null) {
             }
             $index[$name] = $src
         }
-    } catch {}
+    }
+    catch { Write-Verbose "Ignored error in Get-ApplicationCommandIndex: $($_.Exception.Message)" }
     return $index
 }
 
 function Get-OptionalToolCatalog {
     return @(
-        [pscustomobject]@{ Command = "rg";      WingetId = "BurntSushi.ripgrep.MSVC";  ChocoId = "ripgrep"; ScoopId = "ripgrep" },
-        [pscustomobject]@{ Command = "fd";      WingetId = "sharkdp.fd";               ChocoId = "fd";      ScoopId = "fd"      },
-        [pscustomobject]@{ Command = "jq";      WingetId = "jqlang.jq";                ChocoId = "jq";      ScoopId = "jq"      },
-        [pscustomobject]@{ Command = "yq";      WingetId = "MikeFarah.yq";             ChocoId = "yq";      ScoopId = "yq"      },
-        [pscustomobject]@{ Command = "bat";     WingetId = "sharkdp.bat";              ChocoId = "bat";     ScoopId = "bat"     },
-        [pscustomobject]@{ Command = "eza";     WingetId = "eza-community.eza";        ChocoId = "eza";     ScoopId = "eza"     },
-        [pscustomobject]@{ Command = "fzf";     WingetId = "junegunn.fzf";             ChocoId = "fzf";     ScoopId = "fzf"     },
-        [pscustomobject]@{ Command = "ag";      WingetId = "JFLarvoire.Ag";            ChocoId = "ag";      ScoopId = "ag"      },
-        [pscustomobject]@{ Command = "ack";     WingetId = $null;                      ChocoId = $null;     ScoopId = "ack"     },
-        [pscustomobject]@{ Command = "ncat";    WingetId = "Insecure.Nmap";            ChocoId = "nmap";    ScoopId = "nmap"    },
+        [pscustomobject]@{ Command = "rg"; WingetId = "BurntSushi.ripgrep.MSVC"; ChocoId = "ripgrep"; ScoopId = "ripgrep" },
+        [pscustomobject]@{ Command = "fd"; WingetId = "sharkdp.fd"; ChocoId = "fd"; ScoopId = "fd" },
+        [pscustomobject]@{ Command = "jq"; WingetId = "jqlang.jq"; ChocoId = "jq"; ScoopId = "jq" },
+        [pscustomobject]@{ Command = "yq"; WingetId = "MikeFarah.yq"; ChocoId = "yq"; ScoopId = "yq" },
+        [pscustomobject]@{ Command = "bat"; WingetId = "sharkdp.bat"; ChocoId = "bat"; ScoopId = "bat" },
+        [pscustomobject]@{ Command = "eza"; WingetId = "eza-community.eza"; ChocoId = "eza"; ScoopId = "eza" },
+        [pscustomobject]@{ Command = "fzf"; WingetId = "junegunn.fzf"; ChocoId = "fzf"; ScoopId = "fzf" },
+        [pscustomobject]@{ Command = "ag"; WingetId = "JFLarvoire.Ag"; ChocoId = "ag"; ScoopId = "ag" },
+        [pscustomobject]@{ Command = "ack"; WingetId = $null; ChocoId = $null; ScoopId = "ack" },
         
         # Expanded modern tools
-        [pscustomobject]@{ Command = "tldr";    WingetId = "tldr-pages.tldr";          ChocoId = "tldr";    ScoopId = "tldr"    },
-        [pscustomobject]@{ Command = "zoxide";  WingetId = "ajeetdsouza.zoxide";       ChocoId = "zoxide";  ScoopId = "zoxide"  },
-        [pscustomobject]@{ Command = "delta";   WingetId = "dandavison.delta";         ChocoId = "delta";   ScoopId = "delta"   },
-        [pscustomobject]@{ Command = "gh";      WingetId = "GitHub.cli";               ChocoId = "gh";      ScoopId = "gh"      },
-        [pscustomobject]@{ Command = "lazygit"; WingetId = "JesseDuffield.lazygit";    ChocoId = "lazygit"; ScoopId = "lazygit" },
-        [pscustomobject]@{ Command = "dust";    WingetId = "bootandy.dust";            ChocoId = "du-dust"; ScoopId = "dust"    },
-        [pscustomobject]@{ Command = "procs";   WingetId = "dalance.procs";            ChocoId = "procs";   ScoopId = "procs"   },
-        [pscustomobject]@{ Command = "btm";     WingetId = "ClementTsang.bottom";      ChocoId = "bottom";  ScoopId = "bottom"  },
-        [pscustomobject]@{ Command = "curlie";  WingetId = "rs.curlie";                ChocoId = "curlie";  ScoopId = "curlie"  }    )
+        [pscustomobject]@{ Command = "zoxide"; WingetId = "ajeetdsouza.zoxide"; ChocoId = "zoxide"; ScoopId = "zoxide" },
+        [pscustomobject]@{ Command = "delta"; WingetId = "dandavison.delta"; ChocoId = "delta"; ScoopId = "delta" },
+        [pscustomobject]@{ Command = "gh"; WingetId = "GitHub.cli"; ChocoId = "gh"; ScoopId = "gh" },
+        [pscustomobject]@{ Command = "lazygit"; WingetId = "JesseDuffield.lazygit"; ChocoId = "lazygit"; ScoopId = "lazygit" },
+        [pscustomobject]@{ Command = "dust"; WingetId = "bootandy.dust"; ChocoId = "du-dust"; ScoopId = "dust" },
+        [pscustomobject]@{ Command = "procs"; WingetId = "dalance.procs"; ChocoId = "procs"; ScoopId = "procs" }    )
 }
 
 function Get-CoreShimToolCatalog {
@@ -466,34 +584,61 @@ function Get-CoreShimToolCatalog {
 
 function Ensure-OptionalPackageManagers {
     $wingetAvailable = [bool](Get-Command winget -ErrorAction SilentlyContinue)
-    $scoopAvailable  = [bool](Get-Command scoop  -ErrorAction SilentlyContinue)
-    $chocoAvailable  = [bool](Get-Command choco  -ErrorAction SilentlyContinue)
+    $scoopAvailable = Ensure-ScoopCommandAvailable
+    $chocoAvailable = [bool](Get-Command choco  -ErrorAction SilentlyContinue)
 
     if (-not $scoopAvailable) {
-        Write-Host "  [INFO] scoop not found. Attempting scoop bootstrap..." -ForegroundColor DarkGray
-        $scoopScriptUrls = @(
-            "https://raw.githubusercontent.com/scoopinstaller/install/master/install.ps1",
-            "https://get.scoop.sh"
-        )
-        try {
-            Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force -ErrorAction SilentlyContinue
-        } catch {
-            Write-Host "  [INFO] Could not set execution policy for CurrentUser: $($_.Exception.Message)" -ForegroundColor DarkGray
+        if (Test-IsAdministrator) {
+            Write-Host "  [INFO] scoop bootstrap skipped in elevated PowerShell." -ForegroundColor DarkGray
+            Write-Host "       Scoop installer blocks admin by default unless run with -RunAsAdmin." -ForegroundColor DarkGray
+            Write-Host "       Open a non-admin PowerShell and run: irm https://get.scoop.sh | iex" -ForegroundColor DarkGray
         }
-        foreach ($url in $scoopScriptUrls) {
-            if ($scoopAvailable) { break }
+        else {
+            Write-Host "  [INFO] scoop not found. Attempting scoop bootstrap..." -ForegroundColor DarkGray
+            $scoopScriptUrls = @(
+                "https://raw.githubusercontent.com/scoopinstaller/install/master/install.ps1",
+                "https://get.scoop.sh"
+            )
             try {
-                Write-Host "  [INFO] Running scoop bootstrap from: $url" -ForegroundColor DarkGray
-                Invoke-RestMethod -Uri $url | Invoke-Expression
-            } catch {
-                Write-Host "  [INFO] scoop bootstrap attempt failed ($url): $($_.Exception.Message)" -ForegroundColor DarkGray
+                Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force -ErrorAction SilentlyContinue
             }
-            $scoopAvailable = [bool](Get-Command scoop -ErrorAction SilentlyContinue)
-        }
-        if ($scoopAvailable) {
-            Write-Host "  [OK] scoop installed." -ForegroundColor Green
-        } else {
-            Write-Host "  [INFO] scoop bootstrap failed from all configured URLs." -ForegroundColor DarkGray
+            catch {
+                Write-Host "  [INFO] Could not set execution policy for CurrentUser: $($_.Exception.Message)" -ForegroundColor DarkGray
+            }
+            foreach ($url in $scoopScriptUrls) {
+                if ($scoopAvailable) { break }
+                $bootstrapOutput = $null
+                try {
+                    Write-Host "  [INFO] Running scoop bootstrap from: $url" -ForegroundColor DarkGray
+                    # Download to temp file and invoke as script instead of piping through Invoke-Expression.
+                    $scoopInstaller = Join-Path $env:TEMP "scoop-bootstrap-$(Get-Random).ps1"
+                    try {
+                        Invoke-RestMethod -Uri $url -OutFile $scoopInstaller -ErrorAction Stop
+                        $bootstrapOutput = (& { & $scoopInstaller } 2>&1 | Out-String).Trim()
+                    }
+                    finally {
+                        Remove-Item $scoopInstaller -Force -ErrorAction SilentlyContinue
+                    }
+                }
+                catch {
+                    Write-Host "  [INFO] scoop bootstrap attempt failed ($url): $($_.Exception.Message)" -ForegroundColor DarkGray
+                }
+
+                $scoopAvailable = Ensure-ScoopCommandAvailable
+
+                if (-not $scoopAvailable -and $bootstrapOutput) {
+                    $hint = ($bootstrapOutput -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+                    if ($hint) {
+                        Write-Host "  [INFO] scoop bootstrap hint: $hint" -ForegroundColor DarkGray
+                    }
+                }
+            }
+            if ($scoopAvailable) {
+                Write-Host "  [OK] scoop installed." -ForegroundColor Green
+            }
+            else {
+                Write-Host "  [INFO] scoop bootstrap failed from all configured URLs." -ForegroundColor DarkGray
+            }
         }
     }
 
@@ -503,15 +648,18 @@ function Ensure-OptionalPackageManagers {
             if (Get-Command Add-AppxPackage -ErrorAction SilentlyContinue) {
                 Add-AppxPackage -RegisterByFamilyName -MainPackage "Microsoft.DesktopAppInstaller_8wekyb3d8bbwe" -ErrorAction Stop | Out-Null
             }
-        } catch {
+        }
+        catch {
             Write-Host "  [INFO] winget App Installer recovery failed: $($_.Exception.Message)" -ForegroundColor DarkGray
         }
         $wingetAvailable = [bool](Get-Command winget -ErrorAction SilentlyContinue)
         if (-not $wingetAvailable -and $scoopAvailable) {
             try {
                 Write-Host "  [INFO] Attempting winget install via scoop..." -ForegroundColor DarkGray
-                & scoop install winget
-            } catch {
+                # Suppress command output so this function returns only the package-manager status object.
+                $null = & scoop install winget
+            }
+            catch {
                 Write-Host "  [INFO] winget install via scoop failed: $($_.Exception.Message)" -ForegroundColor DarkGray
             }
             $wingetAvailable = [bool](Get-Command winget -ErrorAction SilentlyContinue)
@@ -531,7 +679,8 @@ function Ensure-OptionalPackageManagers {
 function Get-OptionalToolsStatePath {
     $base = if ($script:PathScope -eq "User") {
         if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:USERPROFILE }
-    } else {
+    }
+    else {
         $env:ProgramData
     }
     $stateDir = Join-Path $base "UnixToolsSystemWide"
@@ -547,7 +696,8 @@ function Read-OptionalToolState {
         if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
         $data = ConvertFrom-Json -InputObject $raw -ErrorAction Stop
         return @($data)
-    } catch {
+    }
+    catch {
         return @()
     }
 }
@@ -558,7 +708,8 @@ function Write-OptionalToolState([object[]]$Records) {
     if ($stateDir -and -not (Test-Path $stateDir)) {
         if ($script:DryRun) {
             Write-Host "[DRYRUN] New-Item -ItemType Directory -Path '$stateDir'" -ForegroundColor DarkGray
-        } else {
+        }
+        else {
             New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
         }
     }
@@ -567,7 +718,8 @@ function Write-OptionalToolState([object[]]$Records) {
         if (Test-Path $statePath) {
             if ($script:DryRun) {
                 Write-Host "[DRYRUN] Remove-Item -Path '$statePath'" -ForegroundColor DarkGray
-            } else {
+            }
+            else {
                 Remove-Item -Path $statePath -Force -ErrorAction SilentlyContinue
             }
         }
@@ -577,19 +729,59 @@ function Write-OptionalToolState([object[]]$Records) {
     $json = $Records | ConvertTo-Json -Depth 6
     if ($script:DryRun) {
         Write-Host "[DRYRUN] Set-Content '$statePath' (JSON data)" -ForegroundColor DarkGray
-    } else {
-        Set-Content -Path $statePath -Value $json -Encoding UTF8
+    }
+    else {
+        # Atomic write: write to temp file then rename to avoid partial writes on crash.
+        $tmp = "$statePath.tmp"
+        Set-Content -Path $tmp -Value $json -Encoding UTF8
+        Move-Item -Path $tmp -Destination $statePath -Force
     }
 }
 
 function Install-MissingOptionalTools([object[]]$Catalog) {
     if (-not $Catalog -or $Catalog.Count -eq 0) { return @() }
 
-    $pm = Ensure-OptionalPackageManagers
-    $wingetAvailable = [bool]$pm.Winget
-    $chocoAvailable  = [bool]$pm.Choco
-    $scoopAvailable  = [bool]$pm.Scoop
+    # Defensive parse: external bootstrap commands can emit objects into the output stream.
+    # In StrictMode, directly reading $pm.Winget on a mixed array can throw.
+    $pmProbe = @(Ensure-OptionalPackageManagers)
+    $pm = @(
+        $pmProbe | Where-Object {
+            $_ -and
+            $_.PSObject -and
+            $_.PSObject.Properties["Winget"] -and
+            $_.PSObject.Properties["Scoop"] -and
+            $_.PSObject.Properties["Choco"]
+        }
+    ) | Select-Object -Last 1
+
+    if (-not $pm) {
+        Write-Host "  [WARN] Could not determine package manager availability from probe output." -ForegroundColor Yellow
+        Write-PackageManagerInstallGuidance
+        return @()
+    }
+
+    $wingetAvailable = [bool]$pm.PSObject.Properties["Winget"].Value
+    $chocoAvailable = [bool]$pm.PSObject.Properties["Choco"].Value
+    $scoopAvailable = [bool]$pm.PSObject.Properties["Scoop"].Value
+    $hasAnyPackageManager = $wingetAvailable -or $chocoAvailable -or $scoopAvailable
     $newlyInstalled = @()
+
+    if (-not $hasAnyPackageManager) {
+        $missingCommands = @(
+            $Catalog |
+            Where-Object {
+                $_.Command -and -not (Get-Command ([string]$_.Command) -ErrorAction SilentlyContinue)
+            } |
+            ForEach-Object { [string]$_.Command }
+        )
+
+        if ($missingCommands.Count -gt 0) {
+            Write-Host "  [WARN] Missing optional tools could not be auto-installed (no winget/choco/scoop)." -ForegroundColor Yellow
+            Write-Host "       Missing: $($missingCommands -join ', ')" -ForegroundColor DarkGray
+            Write-PackageManagerInstallGuidance
+        }
+        return @()
+    }
 
     foreach ($tool in $Catalog) {
         $commandName = [string]$tool.Command
@@ -610,11 +802,12 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
             Write-Host "  [INFO] Installing $commandName via winget ($($tool.WingetId))..." -ForegroundColor DarkGray
             if ($script:DryRun) {
                 Write-Host "[DRYRUN] winget install --id $($tool.WingetId) ..." -ForegroundColor DarkGray
-                $LASTEXITCODE = 0
-            } else {
-                & winget install --id $tool.WingetId --exact --source winget --accept-package-agreements --accept-source-agreements
+                $exitCode = 0
             }
-            if ($LASTEXITCODE -eq 0) {
+            else {
+                $exitCode = Invoke-NativeCommand winget install --id $tool.WingetId --exact --source winget --accept-package-agreements --accept-source-agreements
+            }
+            if ($exitCode -eq 0) {
                 $installed = $true
                 $managerUsed = "winget"
                 $packageIdUsed = [string]$tool.WingetId
@@ -626,11 +819,12 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
             Write-Host "  [INFO] Installing $commandName via scoop ($($tool.ScoopId))..." -ForegroundColor DarkGray
             if ($script:DryRun) {
                 Write-Host "[DRYRUN] scoop install $($tool.ScoopId)" -ForegroundColor DarkGray
-                $LASTEXITCODE = 0
-            } else {
-                & scoop install $tool.ScoopId
+                $exitCode = 0
             }
-            if ($LASTEXITCODE -eq 0) {
+            else {
+                $exitCode = Invoke-NativeCommand scoop install $tool.ScoopId
+            }
+            if ($exitCode -eq 0) {
                 $installed = $true
                 $managerUsed = "scoop"
                 $packageIdUsed = [string]$tool.ScoopId
@@ -642,11 +836,12 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
             Write-Host "  [INFO] Installing $commandName via choco ($($tool.ChocoId))..." -ForegroundColor DarkGray
             if ($script:DryRun) {
                 Write-Host "[DRYRUN] choco install $($tool.ChocoId) -y" -ForegroundColor DarkGray
-                $LASTEXITCODE = 0
-            } else {
-                & choco install $tool.ChocoId -y
+                $exitCode = 0
             }
-            if ($LASTEXITCODE -eq 0) {
+            else {
+                $exitCode = Invoke-NativeCommand choco install $tool.ChocoId -y
+            }
+            if ($exitCode -eq 0) {
                 $installed = $true
                 $managerUsed = "choco"
                 $packageIdUsed = [string]$tool.ChocoId
@@ -655,17 +850,20 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
 
         if ($installed) {
             $newlyInstalled += [pscustomobject]@{
-                Command    = $commandName
-                Manager    = $managerUsed
-                PackageId  = $packageIdUsed
-                InstalledAt = (Get-Date).ToString("o")
+                Command       = $commandName
+                Manager       = $managerUsed
+                PackageId     = $packageIdUsed
+                InstalledAt   = (Get-Date).ToString("o")
+                ScriptVersion = $ScriptVersion
             }
             Write-Host "  [OK] Installed optional tool: $commandName" -ForegroundColor Green
-        } else {
+        }
+        else {
             Write-Host "  [INFO] Optional tool not installed: $commandName" -ForegroundColor DarkGray
             if ($attempted.Count -gt 0) {
                 Write-Host "       Attempted via: $($attempted -join ', ')" -ForegroundColor DarkGray
-            } else {
+            }
+            else {
                 Write-Host "       No supported package manager detected (winget/choco/scoop)." -ForegroundColor DarkGray
             }
         }
@@ -714,11 +912,12 @@ function Uninstall-TrackedOptionalTools {
                 Write-Host "  [INFO] Uninstalling optional tool: $commandName via winget ($packageId)..." -ForegroundColor DarkGray
                 if ($script:DryRun) {
                     Write-Host "[DRYRUN] winget uninstall --id $packageId ..." -ForegroundColor DarkGray
-                    $LASTEXITCODE = 0
-                } else {
-                    & winget uninstall --id $packageId --exact --source winget --accept-source-agreements
+                    $exitCode = 0
                 }
-                $ok = ($LASTEXITCODE -eq 0)
+                else {
+                    $exitCode = Invoke-NativeCommand winget uninstall --id $packageId --exact --source winget --accept-source-agreements
+                }
+                $ok = ($exitCode -eq 0)
                 break
             }
             "choco" {
@@ -728,11 +927,12 @@ function Uninstall-TrackedOptionalTools {
                 Write-Host "  [INFO] Uninstalling optional tool: $commandName via choco ($packageId)..." -ForegroundColor DarkGray
                 if ($script:DryRun) {
                     Write-Host "[DRYRUN] choco uninstall $packageId -y" -ForegroundColor DarkGray
-                    $LASTEXITCODE = 0
-                } else {
-                    & choco uninstall $packageId -y
+                    $exitCode = 0
                 }
-                $ok = ($LASTEXITCODE -eq 0)
+                else {
+                    $exitCode = Invoke-NativeCommand choco uninstall $packageId -y
+                }
+                $ok = ($exitCode -eq 0)
                 break
             }
             "scoop" {
@@ -742,11 +942,12 @@ function Uninstall-TrackedOptionalTools {
                 Write-Host "  [INFO] Uninstalling optional tool: $commandName via scoop ($packageId)..." -ForegroundColor DarkGray
                 if ($script:DryRun) {
                     Write-Host "[DRYRUN] scoop uninstall $packageId" -ForegroundColor DarkGray
-                    $LASTEXITCODE = 0
-                } else {
-                    & scoop uninstall $packageId
+                    $exitCode = 0
                 }
-                $ok = ($LASTEXITCODE -eq 0)
+                else {
+                    $exitCode = Invoke-NativeCommand scoop uninstall $packageId
+                }
+                $ok = ($exitCode -eq 0)
                 break
             }
             default {
@@ -757,7 +958,8 @@ function Uninstall-TrackedOptionalTools {
         if ($ok) {
             $removedCount++
             Write-Host "  [OK] Removed optional tool: $commandName" -ForegroundColor Green
-        } else {
+        }
+        else {
             $remaining += $item
         }
     }
@@ -804,18 +1006,22 @@ public class NativeMethods {
             $HWND_BROADCAST, $WM_SETTINGCHANGE,
             [UIntPtr]::Zero, "Environment", 2, 5000, [ref]$result
         ) | Out-Null
-    } catch {
+    }
+    catch {
         # non-fatal
     }
 }
 
 function Refresh-SessionPath {
-    $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
-                [Environment]::GetEnvironmentVariable("Path","User")
+    $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+    [Environment]::GetEnvironmentVariable("Path", "User")
 }
 
 $script:ProfileBackupPath = $null
 function Backup-ProfileFile {
+    # NOTE: Only one backup per run. The first call captures pre-modification state.
+    # If Install-ProfileMissingShims and Install-ProfileAliasCompat both run,
+    # the backup reflects the state before the first modification only.
     param([Parameter(Mandatory = $true)][string]$ProfilePath)
 
     if (-not (Test-Path $ProfilePath)) { return $null }
@@ -825,7 +1031,8 @@ function Backup-ProfileFile {
     $backup = "$ProfilePath.bak-$stamp"
     if ($script:DryRun) {
         Write-Host "[DRYRUN] Backup-ProfileFile: $ProfilePath -> $backup" -ForegroundColor DarkGray
-    } else {
+    }
+    else {
         Copy-Item -Path $ProfilePath -Destination $backup -Force
     }
     $script:ProfileBackupPath = $backup
@@ -844,14 +1051,16 @@ function Upsert-ProfileBlock {
     if ($profileDir -and -not (Test-Path $profileDir)) {
         if ($script:DryRun) {
             Write-Host "[DRYRUN] New-Item -ItemType Directory -Path '$profileDir'" -ForegroundColor DarkGray
-        } else {
+        }
+        else {
             New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
         }
     }
     if (-not (Test-Path $ProfilePath)) {
         if ($script:DryRun) {
             Write-Host "[DRYRUN] New-Item -ItemType File -Path '$ProfilePath'" -ForegroundColor DarkGray
-        } else {
+        }
+        else {
             New-Item -ItemType File -Path $ProfilePath -Force | Out-Null
         }
     }
@@ -883,8 +1092,12 @@ function Upsert-ProfileBlock {
 
     if ($script:DryRun) {
         Write-Host "[DRYRUN] Set-Content '$ProfilePath' (updated profile block)" -ForegroundColor DarkGray
-    } else {
-        Set-Content -Path $ProfilePath -Value $updated -Encoding UTF8
+    }
+    else {
+        # Atomic write: write to temp file then rename to avoid partial writes on crash.
+        $tmp = "$ProfilePath.tmp"
+        Set-Content -Path $tmp -Value $updated -Encoding UTF8
+        Move-Item -Path $tmp -Destination $ProfilePath -Force
     }
 }
 
@@ -912,8 +1125,12 @@ function Remove-ProfileBlock {
     if ($updated -ne $existing) {
         if ($script:DryRun) {
             Write-Host "[DRYRUN] Set-Content '$ProfilePath' (removed profile block)" -ForegroundColor DarkGray
-        } else {
-            Set-Content -Path $ProfilePath -Value $updated -Encoding UTF8
+        }
+        else {
+            # Atomic write: temp+rename to prevent partial writes.
+            $tmp = "$ProfilePath.tmp"
+            Set-Content -Path $tmp -Value $updated -Encoding UTF8
+            Move-Item -Path $tmp -Destination $ProfilePath -Force
         }
     }
 }
@@ -948,8 +1165,12 @@ function Remove-ManagedProfileBlocks {
     }
     if ($script:DryRun) {
         Write-Host "[DRYRUN] Set-Content '$ProfilePath' (removed managed blocks)" -ForegroundColor DarkGray
-    } else {
-        Set-Content -Path $ProfilePath -Value $updated -Encoding UTF8
+    }
+    else {
+        # Atomic write: temp+rename to prevent partial writes.
+        $tmp = "$ProfilePath.tmp"
+        Set-Content -Path $tmp -Value $updated -Encoding UTF8
+        Move-Item -Path $tmp -Destination $ProfilePath -Force
     }
 }
 
@@ -975,9 +1196,9 @@ function Install-ProfileMissingShims {
     $backup = Backup-ProfileFile -ProfilePath $profilePath
     if ($backup) { Write-Host "[INFO] Profile backup: $backup" -ForegroundColor DarkGray }
     $startMarker = "# >>> unix-tools-missing-shims >>>"
-    $endMarker   = "# <<< unix-tools-missing-shims <<<"
+    $endMarker = "# <<< unix-tools-missing-shims <<<"
     $legacyStart = "# >>> git-tools-missing-shims >>>"
-    $legacyEnd   = "# <<< git-tools-missing-shims <<<"
+    $legacyEnd = "# <<< git-tools-missing-shims <<<"
 
     $allFallbackToolNames = @(
         (Get-CoreShimToolCatalog)
@@ -992,7 +1213,7 @@ __UNIX_GENERIC_FALLBACK_TOOL_NAMES__
 foreach ($toolName in $__unixGenericFallbackTools) {
     Add-UnixShimIfMissing -Name $toolName -Body {
         $commandName = $MyInvocation.MyCommand.Name
-        throw "$commandName: fallback unavailable. Install the executable to use this command."
+        throw "${commandName}: fallback unavailable. Install the executable to use this command."
     }
 }
 '@
@@ -1479,7 +1700,7 @@ Add-UnixShimIfMissing -Name "nc" -Body {
     $ArgList = @($args)
     $ncat = Get-Command ncat -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $ncat) {
-        throw "nc: command not found. Install ncat (winget install --id Insecure.Nmap --exact) or run Enable-UnixToolsSystemWide.ps1 -InstallOptionalTools."
+        throw "nc: command not found. Install ncat (winget install --id Insecure.Nmap --exact)."
     }
     & $ncat.Source @ArgList
 }
@@ -1506,6 +1727,7 @@ Add-UnixShimIfMissing -Name "source" -Body {
     $ArgList = @($args)
     if ($ArgList.Count -eq 0) { throw "usage: source <script> [args...]" }
     $path = $ArgList[0]
+    if (-not (Test-Path $path)) { throw "source: file not found: $path" }
     $rest = @()
     if ($ArgList.Count -gt 1) { $rest = $ArgList[1..($ArgList.Count - 1)] }
     . $path @rest
@@ -1536,10 +1758,12 @@ Add-UnixShimIfMissing -Name "make" -Body {
 Add-UnixShimIfMissing -Name "open" -Body {
     $ArgList = @($args)
     if ($ArgList.Count -eq 0) {
+        Write-Verbose "open: launching current directory"
         Start-Process -FilePath "."
         return
     }
     foreach ($target in $ArgList) {
+        Write-Verbose "open: launching '$target'"
         Start-Process -FilePath $target
     }
 }
@@ -1616,7 +1840,9 @@ Add-UnixShimIfMissing -Name "at" -Body {
     if ($time -notmatch '^\d{1,2}:\d{2}$') { throw "at: time format must be HH:mm" }
     $commandText = ($ArgList[1..($ArgList.Count - 1)] -join " ")
     $taskName = "unix-at-" + ([guid]::NewGuid().ToString("N").Substring(0, 8))
-    & schtasks /Create /SC ONCE /TN $taskName /TR $commandText /ST $time /F | Out-Null
+    # Wrap command so the scheduled task self-deletes after execution.
+    $wrappedCommand = "cmd /c $commandText ^& schtasks /Delete /TN $taskName /F"
+    & schtasks /Create /SC ONCE /TN $taskName /TR $wrappedCommand /ST $time /F | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "at: failed to create scheduled task." }
     Write-Output $taskName
 }
@@ -1800,9 +2026,9 @@ function Install-ProfileAliasCompat {
     $backup = Backup-ProfileFile -ProfilePath $profilePath
     if ($backup) { Write-Host "[INFO] Profile backup: $backup" -ForegroundColor DarkGray }
     $startMarker = "# >>> unix-tools-alias-compat >>>"
-    $endMarker   = "# <<< unix-tools-alias-compat <<<"
+    $endMarker = "# <<< unix-tools-alias-compat <<<"
     $legacyStart = "# >>> git-tools-alias-compat >>>"
-    $legacyEnd   = "# <<< git-tools-alias-compat <<<"
+    $legacyEnd = "# <<< git-tools-alias-compat <<<"
 
     $blockBody = @'
 # Prefer external Unix tools over PowerShell aliases/functions when available.
@@ -2504,389 +2730,426 @@ if ($InstallFull) {
 
 $transcriptStarted = Start-ScriptTranscript -Path $LogPath
 try {
-Write-Host "`n=== Unix Tools Enabler v$ScriptVersion ===" -ForegroundColor Magenta
-Write-Host "Adds Unix-compatible tools to Windows PATH ($($script:PathScope) scope)`n" -ForegroundColor Cyan
-if ($InstallFull) {
-    Write-Host "[INFO] -InstallFull enabled: AddMingw/AddGitCmd/NormalizePath/InstallOptionalTools/CreateShims/InstallProfileShims" -ForegroundColor DarkGray
-}
-
-Assert-Admin
-
-$gitRoot = $null
-try {
-    $gitRoot = Get-GitRoot
-    Write-Host "[OK] Git found at: $gitRoot`n" -ForegroundColor Green
-} catch {
-    if (-not $Uninstall) { throw }
-    Write-Host "[INFO] Git installation not detected; uninstall will still clean profile and known shim paths." -ForegroundColor DarkGray
-}
-
-$gitUsrBin   = $null
-$gitMingwBin = $null
-$gitCmd      = $null
-$shimDir     = $null
-$userShimRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:USERPROFILE }
-$userShimDir  = Join-Path $userShimRoot "UnixTools\shims"
-if ($gitRoot) {
-    $gitUsrBin   = Join-Path $gitRoot "usr\bin"
-    $gitMingwBin = Join-Path $gitRoot "mingw64\bin"
-    $gitCmd      = Join-Path $gitRoot "cmd"
-    # Machine scope keeps shims under Git; user scope keeps shims under LocalAppData.
-    if ($script:PathScope -eq "User") {
-        $shimDir = $userShimDir
-    } else {
-        $shimDir = Join-Path $gitRoot "shims"
-    }
-}
-
-$didChange = $false
-
-if ($Uninstall) {
-    Write-Host "=== Uninstall Mode ===" -ForegroundColor Yellow
-
-    if ($script:PathScope -eq "User") {
-        $candidateShimDirs = @($userShimDir)
-        if ($shimDir) { $candidateShimDirs += $shimDir }
-    } else {
-        $candidateShimDirs = @(
-            "C:\Program Files\Git\shims",
-            "C:\Program Files (x86)\Git\shims"
-        )
-        if ($shimDir) { $candidateShimDirs += $shimDir }
-    }
-    $candidateShimDirs = $candidateShimDirs | Select-Object -Unique
-
-    if ($PSCmdlet.ShouldProcess($PROFILE.CurrentUserCurrentHost, "Remove unix-tools profile shim blocks")) {
-        Remove-InstalledProfileShims
-        $didChange = $true
-        Write-Host "[OK] Removed profile shim blocks (unix-tools/git-tools markers)" -ForegroundColor Green
+    Write-Host "`n=== Unix Tools Enabler v$ScriptVersion ===" -ForegroundColor Magenta
+    Write-Host "Adds Unix-compatible tools to Windows PATH ($($script:PathScope) scope)`n" -ForegroundColor Cyan
+    if ($InstallFull) {
+        Write-Host "[INFO] -InstallFull enabled: AddMingw/AddGitCmd/NormalizePath/InstallOptionalTools/CreateShims/InstallProfileShims" -ForegroundColor DarkGray
     }
 
-    foreach ($sd in $candidateShimDirs) {
-        if ($PSCmdlet.ShouldProcess($script:PathDisplay, "Remove shim directory entry $sd")) {
-            if (Remove-MachinePathEntries -pathsToRemove @($sd)) {
-                $didChange = $true
-                Write-Host "[OK] Removed from $($script:PathDisplay): $sd" -ForegroundColor Green
-            }
+    Assert-Admin
+
+    # Backup current PATH before any mutations (fix #5).
+    if (-not $script:DryRun) {
+        Backup-PathVariable -Scope $script:PathScope
+    }
+
+    $gitRoot = $null
+    try {
+        $gitRoot = Get-GitRoot
+        Write-Host "[OK] Git found at: $gitRoot`n" -ForegroundColor Green
+    }
+    catch {
+        if (-not $Uninstall) { throw }
+        Write-Host "[INFO] Git installation not detected; uninstall will still clean profile and known shim paths." -ForegroundColor DarkGray
+    }
+
+    $gitUsrBin = $null
+    $gitMingwBin = $null
+    $gitCmd = $null
+    $shimDir = $null
+    $userShimRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:USERPROFILE }
+    $userShimDir = Join-Path $userShimRoot "UnixTools\shims"
+    if ($gitRoot) {
+        $gitUsrBin = Join-Path $gitRoot "usr\bin"
+        $gitMingwBin = Join-Path $gitRoot "mingw64\bin"
+        $gitCmd = Join-Path $gitRoot "cmd"
+        # Machine scope keeps shims under Git; user scope keeps shims under LocalAppData.
+        if ($script:PathScope -eq "User") {
+            $shimDir = $userShimDir
         }
-        if (Test-Path $sd -PathType Container) {
-            if ($PSCmdlet.ShouldProcess($sd, "Delete generated .cmd shims")) {
-                if ($script:DryRun) {
-                    Write-Host "[DRYRUN] Get-ChildItem '$sd' -Filter *.cmd | Remove-Item -Force" -ForegroundColor DarkGray
-                    Write-Host "[DRYRUN] Remove-Item '$sd' -Force" -ForegroundColor DarkGray
-                } else {
-                    Get-ChildItem $sd -Filter *.cmd -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-                    try { Remove-Item $sd -Force -ErrorAction Stop } catch { }
-                }
-                $didChange = $true
-                Write-Host "[OK] Removed shim files from: $sd" -ForegroundColor Green
-            }
+        else {
+            $shimDir = Join-Path $gitRoot "shims"
         }
     }
 
-    if ($PSCmdlet.ShouldProcess("Optional tools", "Uninstall optional tools previously installed by this script")) {
-        $removedOptional = Uninstall-TrackedOptionalTools
-        if ($removedOptional -gt 0) {
+    $didChange = $false
+
+    if ($Uninstall) {
+        Write-Host "=== Uninstall Mode ===" -ForegroundColor Yellow
+
+        if ($script:PathScope -eq "User") {
+            $candidateShimDirs = @($userShimDir)
+            if ($shimDir) { $candidateShimDirs += $shimDir }
+        }
+        else {
+            $candidateShimDirs = @(
+                "C:\Program Files\Git\shims",
+                "C:\Program Files (x86)\Git\shims"
+            )
+            if ($shimDir) { $candidateShimDirs += $shimDir }
+        }
+        $candidateShimDirs = $candidateShimDirs | Select-Object -Unique
+
+        if ($PSCmdlet.ShouldProcess($PROFILE.CurrentUserCurrentHost, "Remove unix-tools profile shim blocks")) {
+            Remove-InstalledProfileShims
             $didChange = $true
-            Write-Host "[OK] Removed $removedOptional tracked optional tool(s)." -ForegroundColor Green
-        } else {
-            Write-Host "[INFO] No tracked optional tools were removed." -ForegroundColor DarkGray
+            Write-Host "[OK] Removed profile shim blocks (unix-tools/git-tools markers)" -ForegroundColor Green
+        }
+
+        foreach ($sd in $candidateShimDirs) {
+            if ($PSCmdlet.ShouldProcess($script:PathDisplay, "Remove shim directory entry $sd")) {
+                if (Remove-MachinePathEntries -pathsToRemove @($sd)) {
+                    $didChange = $true
+                    Write-Host "[OK] Removed from $($script:PathDisplay): $sd" -ForegroundColor Green
+                }
+            }
+            if (Test-Path $sd -PathType Container) {
+                if ($PSCmdlet.ShouldProcess($sd, "Delete generated .cmd shims")) {
+                    if ($script:DryRun) {
+                        Write-Host "[DRYRUN] Get-ChildItem '$sd' -Filter *.cmd | Remove-Item -Force" -ForegroundColor DarkGray
+                        Write-Host "[DRYRUN] Remove-Item '$sd' -Force" -ForegroundColor DarkGray
+                    }
+                    else {
+                        Get-ChildItem $sd -Filter *.cmd -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+                        try { Remove-Item $sd -Force -ErrorAction Stop } catch { }
+                    }
+                    $didChange = $true
+                    Write-Host "[OK] Removed shim files from: $sd" -ForegroundColor Green
+                }
+            }
+        }
+
+        if ($PSCmdlet.ShouldProcess("Optional tools", "Uninstall optional tools previously installed by this script")) {
+            $removedOptional = Uninstall-TrackedOptionalTools
+            if ($removedOptional -gt 0) {
+                $didChange = $true
+                Write-Host "[OK] Removed $removedOptional tracked optional tool(s)." -ForegroundColor Green
+            }
+            else {
+                Write-Host "[INFO] No tracked optional tools were removed." -ForegroundColor DarkGray
+            }
+        }
+
+        if ($didChange) {
+            Broadcast-EnvironmentChange
+            Refresh-SessionPath
+            Write-Host "[OK] Environment refresh broadcasted" -ForegroundColor Green
+        }
+        else {
+            Write-Host "[INFO] Nothing to uninstall." -ForegroundColor DarkGray
+        }
+
+        Write-Host "`nDone!`n" -ForegroundColor Green
+        return
+    }
+
+    # ======================== Step 1: Add Tool Directories to PATH ========================
+
+    Write-Host "=== Step 1: Add tool directories to $($script:PathDisplay) ===" -ForegroundColor Yellow
+
+    $pathsToAdd = @($gitUsrBin)
+
+    if ($AddMingw) {
+        if (Test-Path $gitMingwBin) { $pathsToAdd += $gitMingwBin }
+        else { Write-Host "[INFO] mingw64\bin not found; skipping" -ForegroundColor DarkGray }
+    }
+
+    if ($AddGitCmd) {
+        if (Test-Path $gitCmd) { $pathsToAdd += $gitCmd }
+        else { Write-Host "[INFO] cmd not found; skipping" -ForegroundColor DarkGray }
+    }
+
+    $changed = $false
+    if ($PSCmdlet.ShouldProcess($script:PathDisplay, "Add tool directories")) {
+        $changed = Add-MachinePathEntries $pathsToAdd
+    }
+
+    if ($changed) {
+        $didChange = $true
+        Write-Host "[OK] Added tool directories to $($script:PathDisplay)" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[OK] Tool directories already in $($script:PathDisplay)" -ForegroundColor Yellow
+    }
+
+    if ($NormalizePath) {
+        if ($PSCmdlet.ShouldProcess($script:PathDisplay, "Normalize PATH entries")) {
+            Update-MachinePathEntries
+            $didChange = $true
+            Write-Host "[OK] Normalized $($script:PathDisplay) (removed duplicates/trailing slashes)" -ForegroundColor Green
         }
     }
 
+    # ======================== Step 1b: Install Optional Tools (Optional) ========================
+
+    $optionalToolCatalog = Get-OptionalToolCatalog
+    if ($InstallOptionalTools) {
+        Write-Host "`n=== Step 1b: Install missing optional CLI tools ===" -ForegroundColor Yellow
+        if ($PSCmdlet.ShouldProcess("Optional tools", "Install missing optional tools via package managers")) {
+            $installedOptional = @(Install-MissingOptionalTools -Catalog $optionalToolCatalog)
+            if ($installedOptional.Count -gt 0) {
+                $didChange = $true
+                Write-Host "[OK] Installed $($installedOptional.Count) missing optional tool(s)." -ForegroundColor Green
+                Write-Host "[INFO] Tracking file: $(Get-OptionalToolsStatePath)" -ForegroundColor DarkGray
+            }
+            else {
+                Write-Host "[OK] No optional tool installs were needed." -ForegroundColor Yellow
+            }
+        }
+        else {
+            Write-Host "Skipped by -WhatIf/-Confirm: optional tool installation." -ForegroundColor DarkGray
+        }
+    }
+    else {
+        Write-Host "`n=== Step 1b: Optional tools ===" -ForegroundColor Yellow
+        Write-Host "Skipped. Use -InstallOptionalTools to auto-install rg/fd/jq/yq/bat/eza/fzf/ag/ack when missing." -ForegroundColor DarkGray
+    }
+
+    # ======================== Step 2: Create Shims (Optional) ========================
+
+    if ($CreateShims) {
+        Write-Host "`n=== Step 2: Create priority shims ===" -ForegroundColor Yellow
+        Write-Host "Shim location: $shimDir" -ForegroundColor Cyan
+
+        if ($PSCmdlet.ShouldProcess($shimDir, "Create/refresh shim .cmd files and prepend shim dir to $($script:PathDisplay)")) {
+            New-DirectoryIfMissing $shimDir
+
+            # Clear stale shims (avoid dead shims after Git upgrades)
+            if ($script:DryRun) {
+                Write-Host "[DRYRUN] Get-ChildItem '$shimDir' -Filter *.cmd | Remove-Item -Force" -ForegroundColor DarkGray
+            }
+            else {
+                Get-ChildItem $shimDir -Filter *.cmd -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+            }
+
+            # Coverage baseline expanded from common Unix/Linux command references.
+            $toolsToShim = Get-CoreShimToolCatalog
+
+            # Optional third-party tools that may already be installed in PATH.
+            $externalTools = @($optionalToolCatalog | ForEach-Object { $_.Command })
+
+            $searchDirs = @($gitUsrBin)
+            if ($AddMingw -and (Test-Path $gitMingwBin)) { $searchDirs += $gitMingwBin }
+            $appIndex = Get-ApplicationCommandIndex -excludeDir $shimDir
+
+            $shimmed = 0
+            $notFound = 0
+            $notFoundTools = New-Object System.Collections.Generic.List[string]
+
+            # Shim discovered Unix tools from configured search dirs; if missing there,
+            # try PATH executables so we can also cover non-Git providers.
+            foreach ($tool in $toolsToShim) {
+                $toolPath = Find-Tool -toolName $tool -searchDirs $searchDirs
+                if (-not $toolPath) {
+                    $toolPath = Find-ToolInPath -toolName $tool -excludeDir $shimDir -AppIndex $appIndex
+                    if (-not $toolPath -and $tool -eq "nc") {
+                        # nmap ships ncat.exe; expose it as nc when nc.exe is absent.
+                        $toolPath = Find-ToolInPath -toolName "ncat" -excludeDir $shimDir -AppIndex $appIndex
+                    }
+                }
+                if ($toolPath) {
+                    if (Write-ShimCmd -shimDir $shimDir -name $tool -targetExePath $toolPath) { $shimmed++ }
+                }
+                else {
+                    $notFound++
+                    $notFoundTools.Add($tool) | Out-Null
+                }
+            }
+
+            # Shim optional third-party tools if installed
+            foreach ($tool in $externalTools) {
+                $toolPath = Find-ToolInPath -toolName $tool -excludeDir $shimDir -AppIndex $appIndex
+                if ($toolPath) {
+                    if (Write-ShimCmd -shimDir $shimDir -name $tool -targetExePath $toolPath) {
+                        $shimmed++
+                        Write-Host "  [OK] Found external tool: $tool" -ForegroundColor Green
+                    }
+                }
+                else {
+                    Write-Host "  [INFO] Optional tool not installed: $tool" -ForegroundColor DarkGray
+                }
+            }
+
+            Add-MachinePathPrepend $shimDir
+            $didChange = $true
+            Write-Host "[OK] Created $shimmed shims in $shimDir (stale shims cleared first)" -ForegroundColor Green
+            Write-Host "[OK] Shim directory prepended to $($script:PathDisplay) (takes priority)" -ForegroundColor Green
+            if ($notFound -gt 0) {
+                Write-Host "[INFO] $notFound requested tools not found (normal)" -ForegroundColor DarkGray
+                $missing = @($notFoundTools | Sort-Object -Unique)
+                Write-Host "[INFO] Missing tools: $($missing -join ', ')" -ForegroundColor DarkGray
+            }
+        }
+        else {
+            Write-Host "Skipped by -WhatIf/-Confirm: shim generation and PATH prepend." -ForegroundColor DarkGray
+        }
+    }
+    else {
+        Write-Host "`n=== Step 2: Shims ===" -ForegroundColor Yellow
+        Write-Host "Skipped. Use -CreateShims for guaranteed priority." -ForegroundColor DarkGray
+    }
+
+    # ======================== Step 2b: Install Profile Shims (Optional) ========================
+
+    if ($InstallProfileShims) {
+        Write-Host "`n=== Step 2b: Install profile shims and alias compatibility ===" -ForegroundColor Yellow
+        if ($PSCmdlet.ShouldProcess($PROFILE.CurrentUserCurrentHost, "Install/update unix-tools profile shim blocks")) {
+            Install-ProfileMissingShims
+            Install-ProfileAliasCompat
+            # Guard: skip profile reload when running elevated to avoid executing
+            # potentially-tampered profile content with admin privileges.
+            $isElevated = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+            try {
+                $profilePath = $PROFILE.CurrentUserCurrentHost
+                if (Test-Path $profilePath) {
+                    if ($isElevated) {
+                        Write-Warning "Skipping automatic profile reload in elevated session for safety. Open a new terminal or run '. `$PROFILE' manually."
+                    }
+                    else {
+                        . $profilePath
+                        Write-Host "[OK] Reloaded profile in current session (. `$PROFILE)" -ForegroundColor Green
+                    }
+                }
+            }
+            catch {
+                Write-Warning "Profile reload failed in current session: $($_.Exception.Message). Open a new terminal or run '. `$PROFILE' manually."
+            }
+            $didChange = $true
+        }
+        else {
+            Write-Host "Skipped by -WhatIf/-Confirm: profile shim installation." -ForegroundColor DarkGray
+        }
+    }
+    else {
+        Write-Host "`n=== Step 2b: Profile shims ===" -ForegroundColor Yellow
+        Write-Host "Skipped. Use -InstallProfileShims to add missing PowerShell-only commands and alias compatibility wrappers." -ForegroundColor DarkGray
+    }
+
+    # ======================== Step 3: Broadcast / Refresh ========================
+
+    Write-Host "`n=== Step 3: Notify system of environment changes ===" -ForegroundColor Yellow
     if ($didChange) {
         Broadcast-EnvironmentChange
-        Refresh-SessionPath
-        Write-Host "[OK] Environment refresh broadcasted" -ForegroundColor Green
-    } else {
-        Write-Host "[INFO] Nothing to uninstall." -ForegroundColor DarkGray
+        Write-Host "[OK] Notified Windows Explorer of PATH changes" -ForegroundColor Green
+    }
+    else {
+        Write-Host "[INFO] No environment changes were applied in this run." -ForegroundColor DarkGray
+    }
+
+    # ======================== Step 4: Verification ========================
+
+    Write-Host "`n=== Step 4: Verification ===" -ForegroundColor Yellow
+    Refresh-SessionPath
+
+    $verifyTools = @("grep", "sed", "awk", "find", "bash")
+    $verifyCommandCache = @{}
+    foreach ($tool in $verifyTools) {
+        $verifyCommandCache[$tool] = @(Get-Command $tool -All -ErrorAction SilentlyContinue)
+    }
+
+    foreach ($tool in $verifyTools) {
+        $cmds = @($verifyCommandCache[$tool])
+        if (-not $cmds) {
+            Write-Host "  [FAIL] $tool (not found in this session; open a NEW terminal)" -ForegroundColor Red
+            continue
+        }
+
+        $top = $cmds | Select-Object -First 3
+        $lines = @()
+        foreach ($c in $top) {
+            $src = $c.Source
+            if ($CreateShims -and $src -like "*\shims\*") {
+                $shimContent = Get-Content $src -Raw -ErrorAction SilentlyContinue
+                $target = $null
+                if ($shimContent -match '"([^"]+\.exe)"') { $target = $matches[1] }
+                if ($target) { $lines += "shim -> $(Split-Path $target -Leaf)" }
+                else { $lines += "shim" }
+            }
+            elseif ($src -like "*\Git\*") {
+                $lines += "Git -> $(Split-Path $src -Leaf)"
+            }
+            else {
+                $lines += "$(Split-Path $src -Leaf)"
+            }
+        }
+
+        Write-Host ("  [OK] {0} -> {1}" -f $tool, ($lines -join " | ")) -ForegroundColor Green
+    }
+
+    if ($InstallProfileShims) {
+        $profilePath = $PROFILE.CurrentUserCurrentHost
+        $profileText = Get-Content -Path $profilePath -Raw -ErrorAction SilentlyContinue
+        $hasMissingBlock = $profileText -and $profileText.Contains("# >>> unix-tools-missing-shims >>>") -and $profileText.Contains("# <<< unix-tools-missing-shims <<<")
+        $hasAliasBlock = $profileText -and $profileText.Contains("# >>> unix-tools-alias-compat >>>") -and $profileText.Contains("# <<< unix-tools-alias-compat <<<")
+
+        if ($hasMissingBlock) {
+            Write-Host "  [OK] missing-command profile shims block present in $profilePath" -ForegroundColor Green
+        }
+        else {
+            Write-Host "  [FAIL] missing-command profile shims block not found in $profilePath" -ForegroundColor Red
+        }
+
+        if ($hasAliasBlock) {
+            Write-Host "  [OK] alias-compat profile shims block present in $profilePath" -ForegroundColor Green
+        }
+        else {
+            Write-Host "  [FAIL] alias-compat profile shims block not found in $profilePath" -ForegroundColor Red
+        }
+    }
+
+    Write-Host "`n=== Important Notes ===" -ForegroundColor Yellow
+    Write-Host "- Shell built-ins (rd, dir, copy, del) CANNOT be overridden by shims" -ForegroundColor White
+    Write-Host "- Use Unix equivalents instead: rm -r (for rd), ls (for dir), cp (for copy)" -ForegroundColor White
+    Write-Host "- Optional extras: rg, fd, jq, yq, bat, eza, fzf, ag, ack (use -InstallOptionalTools)" -ForegroundColor White
+    Write-Host "- On -Uninstall, tracked optional tools installed by this script are removed." -ForegroundColor White
+    Write-Host "- One-shot setup: .\Enable-UnixToolsSystemWide.ps1 -InstallFull" -ForegroundColor White
+    Write-Host "- User-scope setup: .\Enable-UnixToolsSystemWide.ps1 -InstallFull -UserScope" -ForegroundColor White
+    if ($CreateShims) {
+        Write-Host "- Shims are located in: $shimDir" -ForegroundColor Cyan
+        if ($script:PathScope -eq "Machine") {
+            Write-Host "- Uninstalling Git will remove shims automatically" -ForegroundColor Cyan
+        }
+        else {
+            Write-Host "- User-scope shims are managed under LocalAppData and are removed by -Uninstall -UserScope" -ForegroundColor Cyan
+        }
+    }
+    if ($InstallProfileShims) {
+        Write-Host "- Missing-command profile shims installed for core wrappers (export, grep/rg, file/text helpers, alias compat) plus generic fallback stubs for every command in the shim catalog when executable is missing." -ForegroundColor Cyan
+        Write-Host "- Alias-compat wrappers installed for common commands: rm, cp, mv, mkdir, ls, cat, sort, diff, tee, sleep" -ForegroundColor Cyan
+        Write-Host "- Profile shims are idempotent and stored in marker blocks under your profile" -ForegroundColor Cyan
+        Write-Host "- Coverage report command: Show-UnixCoverageReport -IncludeMissing" -ForegroundColor Cyan
+    }
+    if ($InstallOptionalTools) {
+        Write-Host "- Optional tool auto-install attempted via winget/choco/scoop for missing commands." -ForegroundColor Cyan
+        Write-Host "- Installed optional tools are tracked for clean removal during -Uninstall." -ForegroundColor Cyan
+    }
+    Write-Host "- Uninstall support: .\Enable-UnixToolsSystemWide.ps1 -Uninstall (Machine) or -Uninstall -UserScope (User)" -ForegroundColor White
+
+    Write-Host "`n=== Next Steps ===" -ForegroundColor Yellow
+    Write-Host "1) Close this terminal" -ForegroundColor White
+    Write-Host "2) Open a NEW PowerShell/CMD window" -ForegroundColor White
+    Write-Host "3) Test:" -ForegroundColor White
+    Write-Host "   where.exe grep" -ForegroundColor Cyan
+    Write-Host "   grep --version" -ForegroundColor Cyan
+    Write-Host "   Get-Command grep -All" -ForegroundColor Cyan
+    if ($InstallProfileShims) {
+        Write-Host "   export DEMO_VAR=ok" -ForegroundColor Cyan
+        Write-Host "   'stressed' | rev" -ForegroundColor Cyan
+        Write-Host "   rm -rf .\tmp" -ForegroundColor Cyan
+        Write-Host "   ls -la" -ForegroundColor Cyan
+        Write-Host "   Show-UnixCoverageReport -IncludeMissing" -ForegroundColor Cyan
+    }
+    if ($InstallOptionalTools) {
+        Write-Host "   rg --version" -ForegroundColor Cyan
+        Write-Host "   fd --version" -ForegroundColor Cyan
+        Write-Host "   jq --version" -ForegroundColor Cyan
     }
 
     Write-Host "`nDone!`n" -ForegroundColor Green
-    return
+
 }
-
-# ======================== Step 1: Add Tool Directories to PATH ========================
-
-Write-Host "=== Step 1: Add tool directories to $($script:PathDisplay) ===" -ForegroundColor Yellow
-
-$pathsToAdd = @($gitUsrBin)
-
-if ($AddMingw) {
-    if (Test-Path $gitMingwBin) { $pathsToAdd += $gitMingwBin }
-    else { Write-Host "[INFO] mingw64\bin not found; skipping" -ForegroundColor DarkGray }
-}
-
-if ($AddGitCmd) {
-    if (Test-Path $gitCmd) { $pathsToAdd += $gitCmd }
-    else { Write-Host "[INFO] cmd not found; skipping" -ForegroundColor DarkGray }
-}
-
-$changed = $false
-if ($PSCmdlet.ShouldProcess($script:PathDisplay, "Add tool directories")) {
-    $changed = Add-MachinePathEntries $pathsToAdd
-}
-
-if ($changed) {
-    $didChange = $true
-    Write-Host "[OK] Added tool directories to $($script:PathDisplay)" -ForegroundColor Green
-} else {
-    Write-Host "[OK] Tool directories already in $($script:PathDisplay)" -ForegroundColor Yellow
-}
-
-if ($NormalizePath) {
-    if ($PSCmdlet.ShouldProcess($script:PathDisplay, "Normalize PATH entries")) {
-        Update-MachinePathEntries
-        $didChange = $true
-        Write-Host "[OK] Normalized $($script:PathDisplay) (removed duplicates/trailing slashes)" -ForegroundColor Green
-    }
-}
-
-# ======================== Step 1b: Install Optional Tools (Optional) ========================
-
-$optionalToolCatalog = Get-OptionalToolCatalog
-if ($InstallOptionalTools) {
-    Write-Host "`n=== Step 1b: Install missing optional CLI tools ===" -ForegroundColor Yellow
-    if ($PSCmdlet.ShouldProcess("Optional tools", "Install missing optional tools via package managers")) {
-        $installedOptional = @(Install-MissingOptionalTools -Catalog $optionalToolCatalog)
-        if ($installedOptional.Count -gt 0) {
-            $didChange = $true
-            Write-Host "[OK] Installed $($installedOptional.Count) missing optional tool(s)." -ForegroundColor Green
-            Write-Host "[INFO] Tracking file: $(Get-OptionalToolsStatePath)" -ForegroundColor DarkGray
-        } else {
-            Write-Host "[OK] No optional tool installs were needed." -ForegroundColor Yellow
-        }
-    } else {
-        Write-Host "Skipped by -WhatIf/-Confirm: optional tool installation." -ForegroundColor DarkGray
-    }
-} else {
-    Write-Host "`n=== Step 1b: Optional tools ===" -ForegroundColor Yellow
-    Write-Host "Skipped. Use -InstallOptionalTools to auto-install rg/fd/jq/yq/bat/eza/fzf/ag/ack/ncat when missing." -ForegroundColor DarkGray
-}
-
-# ======================== Step 2: Create Shims (Optional) ========================
-
-if ($CreateShims) {
-    Write-Host "`n=== Step 2: Create priority shims ===" -ForegroundColor Yellow
-    Write-Host "Shim location: $shimDir" -ForegroundColor Cyan
-
-    if ($PSCmdlet.ShouldProcess($shimDir, "Create/refresh shim .cmd files and prepend shim dir to $($script:PathDisplay)")) {
-        New-DirectoryIfMissing $shimDir
-
-        # Clear stale shims (avoid dead shims after Git upgrades)
-        if ($script:DryRun) {
-             Write-Host "[DRYRUN] Get-ChildItem '$shimDir' -Filter *.cmd | Remove-Item -Force" -ForegroundColor DarkGray
-        } else {
-             Get-ChildItem $shimDir -Filter *.cmd -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-        }
-
-        # Coverage baseline expanded from common Unix/Linux command references.
-        $toolsToShim = Get-CoreShimToolCatalog
-
-        # Optional third-party tools that may already be installed in PATH.
-        $externalTools = @($optionalToolCatalog | ForEach-Object { $_.Command })
-
-        $searchDirs = @($gitUsrBin)
-        if ($AddMingw -and (Test-Path $gitMingwBin)) { $searchDirs += $gitMingwBin }
-        $appIndex = Get-ApplicationCommandIndex -excludeDir $shimDir
-
-        $shimmed = 0
-        $notFound = 0
-        $notFoundTools = New-Object System.Collections.Generic.List[string]
-
-        # Shim discovered Unix tools from configured search dirs; if missing there,
-        # try PATH executables so we can also cover non-Git providers.
-        foreach ($tool in $toolsToShim) {
-            $toolPath = Find-Tool -toolName $tool -searchDirs $searchDirs
-            if (-not $toolPath) {
-                $toolPath = Find-ToolInPath -toolName $tool -excludeDir $shimDir -AppIndex $appIndex
-                if (-not $toolPath -and $tool -eq "nc") {
-                    # nmap ships ncat.exe; expose it as nc when nc.exe is absent.
-                    $toolPath = Find-ToolInPath -toolName "ncat" -excludeDir $shimDir -AppIndex $appIndex
-                }
-            }
-            if ($toolPath) {
-                if (Write-ShimCmd -shimDir $shimDir -name $tool -targetExePath $toolPath) { $shimmed++ }
-            } else {
-                $notFound++
-                $notFoundTools.Add($tool) | Out-Null
-            }
-        }
-
-        # Shim optional third-party tools if installed
-        foreach ($tool in $externalTools) {
-            $toolPath = Find-ToolInPath -toolName $tool -excludeDir $shimDir -AppIndex $appIndex
-            if ($toolPath) {
-                if (Write-ShimCmd -shimDir $shimDir -name $tool -targetExePath $toolPath) {
-                    $shimmed++
-                    Write-Host "  [OK] Found external tool: $tool" -ForegroundColor Green
-                }
-            } else {
-                Write-Host "  [INFO] Optional tool not installed: $tool" -ForegroundColor DarkGray
-            }
-        }
-
-        Add-MachinePathPrepend $shimDir
-        $didChange = $true
-        Write-Host "[OK] Created $shimmed shims in $shimDir (stale shims cleared first)" -ForegroundColor Green
-        Write-Host "[OK] Shim directory prepended to $($script:PathDisplay) (takes priority)" -ForegroundColor Green
-        if ($notFound -gt 0) {
-            Write-Host "[INFO] $notFound requested tools not found (normal)" -ForegroundColor DarkGray
-            $missing = @($notFoundTools | Sort-Object -Unique)
-            Write-Host "[INFO] Missing tools: $($missing -join ', ')" -ForegroundColor DarkGray
-        }
-    } else {
-        Write-Host "Skipped by -WhatIf/-Confirm: shim generation and PATH prepend." -ForegroundColor DarkGray
-    }
-} else {
-    Write-Host "`n=== Step 2: Shims ===" -ForegroundColor Yellow
-    Write-Host "Skipped. Use -CreateShims for guaranteed priority." -ForegroundColor DarkGray
-}
-
-# ======================== Step 2b: Install Profile Shims (Optional) ========================
-
-if ($InstallProfileShims) {
-    Write-Host "`n=== Step 2b: Install profile shims and alias compatibility ===" -ForegroundColor Yellow
-    if ($PSCmdlet.ShouldProcess($PROFILE.CurrentUserCurrentHost, "Install/update unix-tools profile shim blocks")) {
-        Install-ProfileMissingShims
-        Install-ProfileAliasCompat
-        try {
-            $profilePath = $PROFILE.CurrentUserCurrentHost
-            if (Test-Path $profilePath) {
-                . $profilePath
-                Write-Host "[OK] Reloaded profile in current session (. `$PROFILE)" -ForegroundColor Green
-            }
-        } catch {
-            Write-Warning "Profile reload failed in current session: $($_.Exception.Message). Open a new terminal or run '. `$PROFILE' manually."
-        }
-        $didChange = $true
-    } else {
-        Write-Host "Skipped by -WhatIf/-Confirm: profile shim installation." -ForegroundColor DarkGray
-    }
-} else {
-    Write-Host "`n=== Step 2b: Profile shims ===" -ForegroundColor Yellow
-    Write-Host "Skipped. Use -InstallProfileShims to add missing PowerShell-only commands and alias compatibility wrappers." -ForegroundColor DarkGray
-}
-
-# ======================== Step 3: Broadcast / Refresh ========================
-
-Write-Host "`n=== Step 3: Notify system of environment changes ===" -ForegroundColor Yellow
-if ($didChange) {
-    Broadcast-EnvironmentChange
-    Write-Host "[OK] Notified Windows Explorer of PATH changes" -ForegroundColor Green
-} else {
-    Write-Host "[INFO] No environment changes were applied in this run." -ForegroundColor DarkGray
-}
-
-# ======================== Step 4: Verification ========================
-
-Write-Host "`n=== Step 4: Verification ===" -ForegroundColor Yellow
-Refresh-SessionPath
-
-$verifyTools = @("grep","sed","awk","find","bash")
-$verifyCommandCache = @{}
-foreach ($tool in $verifyTools) {
-    $verifyCommandCache[$tool] = @(Get-Command $tool -All -ErrorAction SilentlyContinue)
-}
-
-foreach ($tool in $verifyTools) {
-    $cmds = @($verifyCommandCache[$tool])
-    if (-not $cmds) {
-        Write-Host "  [FAIL] $tool (not found in this session; open a NEW terminal)" -ForegroundColor Red
-        continue
-    }
-
-    $top = $cmds | Select-Object -First 3
-    $lines = @()
-    foreach ($c in $top) {
-        $src = $c.Source
-        if ($CreateShims -and $src -like "*\shims\*") {
-            $shimContent = Get-Content $src -Raw -ErrorAction SilentlyContinue
-            $target = $null
-            if ($shimContent -match '"([^"]+\.exe)"') { $target = $matches[1] }
-            if ($target) { $lines += "shim -> $(Split-Path $target -Leaf)" }
-            else         { $lines += "shim" }
-        } elseif ($src -like "*\Git\*") {
-            $lines += "Git -> $(Split-Path $src -Leaf)"
-        } else {
-            $lines += "$(Split-Path $src -Leaf)"
-        }
-    }
-
-    Write-Host ("  [OK] {0} -> {1}" -f $tool, ($lines -join " | ")) -ForegroundColor Green
-}
-
-if ($InstallProfileShims) {
-    $profilePath = $PROFILE.CurrentUserCurrentHost
-    $profileText = Get-Content -Path $profilePath -Raw -ErrorAction SilentlyContinue
-    $hasMissingBlock = $profileText -and $profileText.Contains("# >>> unix-tools-missing-shims >>>") -and $profileText.Contains("# <<< unix-tools-missing-shims <<<")
-    $hasAliasBlock = $profileText -and $profileText.Contains("# >>> unix-tools-alias-compat >>>") -and $profileText.Contains("# <<< unix-tools-alias-compat <<<")
-
-    if ($hasMissingBlock) {
-        Write-Host "  [OK] missing-command profile shims block present in $profilePath" -ForegroundColor Green
-    } else {
-        Write-Host "  [FAIL] missing-command profile shims block not found in $profilePath" -ForegroundColor Red
-    }
-
-    if ($hasAliasBlock) {
-        Write-Host "  [OK] alias-compat profile shims block present in $profilePath" -ForegroundColor Green
-    } else {
-        Write-Host "  [FAIL] alias-compat profile shims block not found in $profilePath" -ForegroundColor Red
-    }
-}
-
-Write-Host "`n=== Important Notes ===" -ForegroundColor Yellow
-Write-Host "- Shell built-ins (rd, dir, copy, del) CANNOT be overridden by shims" -ForegroundColor White
-Write-Host "- Use Unix equivalents instead: rm -r (for rd), ls (for dir), cp (for copy)" -ForegroundColor White
-Write-Host "- Optional extras: rg, fd, jq, yq, bat, eza, fzf, ag, ack, ncat (use -InstallOptionalTools)" -ForegroundColor White
-Write-Host "- On -Uninstall, tracked optional tools installed by this script are removed." -ForegroundColor White
-Write-Host "- One-shot setup: .\Enable-UnixToolsSystemWide.ps1 -InstallFull" -ForegroundColor White
-Write-Host "- User-scope setup: .\Enable-UnixToolsSystemWide.ps1 -InstallFull -UserScope" -ForegroundColor White
-if ($CreateShims) {
-    Write-Host "- Shims are located in: $shimDir" -ForegroundColor Cyan
-    if ($script:PathScope -eq "Machine") {
-        Write-Host "- Uninstalling Git will remove shims automatically" -ForegroundColor Cyan
-    } else {
-        Write-Host "- User-scope shims are managed under LocalAppData and are removed by -Uninstall -UserScope" -ForegroundColor Cyan
-    }
-}
-if ($InstallProfileShims) {
-    Write-Host "- Missing-command profile shims installed for core wrappers (export, grep/rg, file/text helpers, alias compat) plus generic fallback stubs for every command in the shim catalog when executable is missing." -ForegroundColor Cyan
-    Write-Host "- Alias-compat wrappers installed for common commands: rm, cp, mv, mkdir, ls, cat, sort, diff, tee, sleep" -ForegroundColor Cyan
-    Write-Host "- Profile shims are idempotent and stored in marker blocks under your profile" -ForegroundColor Cyan
-    Write-Host "- Coverage report command: Show-UnixCoverageReport -IncludeMissing" -ForegroundColor Cyan
-}
-if ($InstallOptionalTools) {
-    Write-Host "- Optional tool auto-install attempted via winget/choco/scoop for missing commands." -ForegroundColor Cyan
-    Write-Host "- Installed optional tools are tracked for clean removal during -Uninstall." -ForegroundColor Cyan
-}
-Write-Host "- Uninstall support: .\Enable-UnixToolsSystemWide.ps1 -Uninstall (Machine) or -Uninstall -UserScope (User)" -ForegroundColor White
-
-Write-Host "`n=== Next Steps ===" -ForegroundColor Yellow
-Write-Host "1) Close this terminal" -ForegroundColor White
-Write-Host "2) Open a NEW PowerShell/CMD window" -ForegroundColor White
-Write-Host "3) Test:" -ForegroundColor White
-Write-Host "   where.exe grep" -ForegroundColor Cyan
-Write-Host "   grep --version" -ForegroundColor Cyan
-Write-Host "   Get-Command grep -All" -ForegroundColor Cyan
-if ($InstallProfileShims) {
-    Write-Host "   export DEMO_VAR=ok" -ForegroundColor Cyan
-    Write-Host "   'stressed' | rev" -ForegroundColor Cyan
-    Write-Host "   rm -rf .\tmp" -ForegroundColor Cyan
-    Write-Host "   ls -la" -ForegroundColor Cyan
-    Write-Host "   Show-UnixCoverageReport -IncludeMissing" -ForegroundColor Cyan
-}
-if ($InstallOptionalTools) {
-    Write-Host "   rg --version" -ForegroundColor Cyan
-    Write-Host "   fd --version" -ForegroundColor Cyan
-    Write-Host "   jq --version" -ForegroundColor Cyan
-}
-
-Write-Host "`nDone!`n" -ForegroundColor Green
-
-} finally {
+finally {
     if ($transcriptStarted) {
         Stop-ScriptTranscript
     }
 }
-
