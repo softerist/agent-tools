@@ -877,7 +877,7 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
         $missingCommands = @(
             $Catalog |
             Where-Object {
-                $_.Command -and -not (Get-Command ([string]$_.Command) -ErrorAction SilentlyContinue)
+                $_.Command -and -not (Get-Command ([string]$_.Command) -CommandType Application -ErrorAction SilentlyContinue)
             } |
             ForEach-Object { [string]$_.Command }
         )
@@ -894,7 +894,7 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
         $commandName = [string]$tool.Command
         if ([string]::IsNullOrWhiteSpace($commandName)) { continue }
 
-        if (Get-Command $commandName -ErrorAction SilentlyContinue) {
+        if (Get-Command $commandName -CommandType Application -ErrorAction SilentlyContinue) {
             # Silently counted — reported as summary after loop by the caller
             continue
         }
