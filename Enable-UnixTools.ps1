@@ -125,7 +125,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$ScriptVersion = "2.1.2"
+$ScriptVersion = "2.2.1"
 $script:PathScope = if ($UserScope) { "User" } else { "Machine" }
 $script:PathDisplay = "$($script:PathScope) PATH"
 $script:DryRun = $DryRun.IsPresent
