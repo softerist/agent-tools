@@ -25,8 +25,8 @@
     Remove duplicate and trailing-backslash entries from selected PATH scope.
 
 .PARAMETER InstallProfileShims
-    Install PowerShell profile blocks for missing-command shims and
-    alias-compat wrappers (rm, cp, mv, ls, cat, sort, diff, tee, sleep).
+    Install a small PowerShell profile bootstrap block that dot-sources
+    Enable-UnixToolsFast.ps1 from a managed location.
 
 .PARAMETER InstallOptionalTools
     Install missing optional CLI tools (rg, fd, jq, yq, bat, eza, fzf, ag, ack)
@@ -44,8 +44,8 @@
     - Shim directory is stored under LocalAppData
 
 .PARAMETER Uninstall
-    Remove shim directory, PATH entries, profile blocks, and optional tools
-    previously installed by this script.
+    Remove shim directory, PATH entries, profile blocks, managed
+    Enable-UnixToolsFast.ps1 copy, and optional tools installed by this script.
 
 .PARAMETER LogPath
     Path to a transcript log file for this run.
@@ -1020,8 +1020,6 @@ function Refresh-SessionPath {
 $script:ProfileBackupPath = $null
 function Backup-ProfileFile {
     # NOTE: Only one backup per run. The first call captures pre-modification state.
-    # If Install-ProfileMissingShims and Install-ProfileAliasCompat both run,
-    # the backup reflects the state before the first modification only.
     param([Parameter(Mandatory = $true)][string]$ProfilePath)
 
     if (-not (Test-Path $ProfilePath)) { return $null }
@@ -1037,6 +1035,80 @@ function Backup-ProfileFile {
     }
     $script:ProfileBackupPath = $backup
     return $backup
+}
+
+function Get-FastShimManagedPath {
+    $root = $null
+    if ($script:PathScope -eq "User") {
+        if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+            $root = Join-Path $env:LOCALAPPDATA "UnixTools"
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+            $root = Join-Path $env:USERPROFILE "UnixTools"
+        }
+        else {
+            throw "Cannot resolve user profile path for managed fast shim installation."
+        }
+    }
+    else {
+        if ([string]::IsNullOrWhiteSpace($env:ProgramData)) {
+            throw "Cannot resolve ProgramData path for managed fast shim installation."
+        }
+        $root = Join-Path $env:ProgramData "UnixToolsSystemWide"
+    }
+
+    return Join-Path $root "Enable-UnixToolsFast.ps1"
+}
+
+function Install-ManagedFastShimScript {
+    $sourcePath = Join-Path $PSScriptRoot "Enable-UnixToolsFast.ps1"
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+        throw "Enable-UnixToolsFast.ps1 was not found next to this installer: $sourcePath"
+    }
+
+    $targetPath = Get-FastShimManagedPath
+    $targetDir = Split-Path -Parent $targetPath
+    if ($targetDir -and -not (Test-Path -LiteralPath $targetDir -PathType Container)) {
+        if ($script:DryRun) {
+            Write-Host "[DRYRUN] New-Item -ItemType Directory -Path '$targetDir'" -ForegroundColor DarkGray
+        }
+        else {
+            New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+        }
+    }
+
+    if ($script:DryRun) {
+        Write-Host "[DRYRUN] Copy-Item '$sourcePath' -> '$targetPath'" -ForegroundColor DarkGray
+    }
+    else {
+        $tmp = "$targetPath.tmp"
+        Copy-Item -LiteralPath $sourcePath -Destination $tmp -Force
+        Move-Item -Path $tmp -Destination $targetPath -Force
+    }
+
+    return $targetPath
+}
+
+function Remove-ManagedFastShimScript {
+    param([Parameter(Mandatory = $true)][string]$TargetPath)
+
+    if (-not (Test-Path -LiteralPath $targetPath -PathType Leaf)) { return $false }
+
+    if ($script:DryRun) {
+        Write-Host "[DRYRUN] Remove-Item '$targetPath' -Force" -ForegroundColor DarkGray
+        return $true
+    }
+
+    Remove-Item -LiteralPath $targetPath -Force -ErrorAction SilentlyContinue
+    $targetDir = Split-Path -Parent $targetPath
+    if ($targetDir -and (Test-Path -LiteralPath $targetDir -PathType Container)) {
+        $remaining = Get-ChildItem -Path $targetDir -Force -ErrorAction SilentlyContinue
+        if (-not $remaining) {
+            Remove-Item -LiteralPath $targetDir -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    return $true
 }
 
 function Upsert-ProfileBlock {
@@ -1180,6 +1252,7 @@ function Remove-InstalledProfileShims {
     if ($backup) { Write-Host "[INFO] Profile backup: $backup" -ForegroundColor DarkGray }
     Remove-ManagedProfileBlocks -ProfilePath $profilePath
     $markers = @(
+        @{ Start = "# >>> unix-tools-fast-shims >>>"; End = "# <<< unix-tools-fast-shims <<<" },
         @{ Start = "# >>> unix-tools-missing-shims >>>"; End = "# <<< unix-tools-missing-shims <<<" },
         @{ Start = "# >>> unix-tools-alias-compat >>>"; End = "# <<< unix-tools-alias-compat <<<" },
         @{ Start = "# >>> git-tools-missing-shims >>>"; End = "# <<< git-tools-missing-shims <<<" },
@@ -1189,6 +1262,39 @@ function Remove-InstalledProfileShims {
     foreach ($m in $markers) {
         Remove-ProfileBlock -ProfilePath $profilePath -StartMarker $m.Start -EndMarker $m.End
     }
+}
+
+function Install-ProfileFastShims {
+    $profilePath = $PROFILE.CurrentUserCurrentHost
+    $backup = Backup-ProfileFile -ProfilePath $profilePath
+    if ($backup) { Write-Host "[INFO] Profile backup: $backup" -ForegroundColor DarkGray }
+
+    $managedFastPath = Install-ManagedFastShimScript
+
+    # Keep migration idempotent by clearing any previously managed unix-tools blocks
+    # before writing the new bootstrap marker.
+    Remove-InstalledProfileShims
+
+    $startMarker = "# >>> unix-tools-fast-shims >>>"
+    $endMarker = "# <<< unix-tools-fast-shims <<<"
+    $fastPathLiteral = $managedFastPath.Replace("'", "''")
+
+    $blockBody = @'
+$__unixFastShimPath = '__UNIX_FAST_SHIM_PATH__'
+if (Test-Path -LiteralPath $__unixFastShimPath) {
+    . $__unixFastShimPath
+}
+else {
+    Write-Warning ("unix-tools: fast shim bootstrap not found at {0}. Re-run Enable-UnixToolsSystemWide.ps1 -InstallProfileShims." -f $__unixFastShimPath)
+}
+'@
+    $blockBody = $blockBody.Replace("__UNIX_FAST_SHIM_PATH__", $fastPathLiteral)
+
+    Upsert-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody
+    Write-Host "[OK] Installed/updated fast shim bootstrap block in: $profilePath" -ForegroundColor Green
+    Write-Host "[OK] Managed fast shim script: $managedFastPath" -ForegroundColor Green
+
+    return $managedFastPath
 }
 
 function Install-ProfileMissingShims {
@@ -2796,6 +2902,23 @@ try {
             Write-Host "[OK] Removed profile shim blocks (unix-tools/git-tools markers)" -ForegroundColor Green
         }
 
+        $managedFastShimPath = $null
+        try {
+            $managedFastShimPath = Get-FastShimManagedPath
+        }
+        catch {
+            Write-Warning "Unable to resolve managed fast shim path for cleanup: $($_.Exception.Message)"
+        }
+        if ($managedFastShimPath -and $PSCmdlet.ShouldProcess($managedFastShimPath, "Remove managed Enable-UnixToolsFast.ps1 copy")) {
+            if (Remove-ManagedFastShimScript -TargetPath $managedFastShimPath) {
+                $didChange = $true
+                Write-Host "[OK] Removed managed fast shim script: $managedFastShimPath" -ForegroundColor Green
+            }
+            else {
+                Write-Host "[INFO] Managed fast shim script not present: $managedFastShimPath" -ForegroundColor DarkGray
+            }
+        }
+
         foreach ($sd in $candidateShimDirs) {
             if ($PSCmdlet.ShouldProcess($script:PathDisplay, "Remove shim directory entry $sd")) {
                 if (Remove-MachinePathEntries -pathsToRemove @($sd)) {
@@ -2992,10 +3115,9 @@ try {
     # ======================== Step 2b: Install Profile Shims (Optional) ========================
 
     if ($InstallProfileShims) {
-        Write-Host "`n=== Step 2b: Install profile shims and alias compatibility ===" -ForegroundColor Yellow
+        Write-Host "`n=== Step 2b: Install profile fast-shim bootstrap ===" -ForegroundColor Yellow
         if ($PSCmdlet.ShouldProcess($PROFILE.CurrentUserCurrentHost, "Install/update unix-tools profile shim blocks")) {
-            Install-ProfileMissingShims
-            Install-ProfileAliasCompat
+            $managedFastPath = Install-ProfileFastShims
             # Guard: skip profile reload when running elevated to avoid executing
             # potentially-tampered profile content with admin privileges.
             $isElevated = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -3014,6 +3136,7 @@ try {
             catch {
                 Write-Warning "Profile reload failed in current session: $($_.Exception.Message). Open a new terminal or run '. `$PROFILE' manually."
             }
+            Write-Host "[OK] Fast shim bootstrap target: $managedFastPath" -ForegroundColor Green
             $didChange = $true
         }
         else {
@@ -3022,7 +3145,7 @@ try {
     }
     else {
         Write-Host "`n=== Step 2b: Profile shims ===" -ForegroundColor Yellow
-        Write-Host "Skipped. Use -InstallProfileShims to add missing PowerShell-only commands and alias compatibility wrappers." -ForegroundColor DarkGray
+        Write-Host "Skipped. Use -InstallProfileShims to bootstrap Enable-UnixToolsFast.ps1 in your profile." -ForegroundColor DarkGray
     }
 
     # ======================== Step 3: Broadcast / Refresh ========================
@@ -3078,22 +3201,37 @@ try {
 
     if ($InstallProfileShims) {
         $profilePath = $PROFILE.CurrentUserCurrentHost
-        $profileText = Get-Content -Path $profilePath -Raw -ErrorAction SilentlyContinue
-        $hasMissingBlock = $profileText -and $profileText.Contains("# >>> unix-tools-missing-shims >>>") -and $profileText.Contains("# <<< unix-tools-missing-shims <<<")
-        $hasAliasBlock = $profileText -and $profileText.Contains("# >>> unix-tools-alias-compat >>>") -and $profileText.Contains("# <<< unix-tools-alias-compat <<<")
-
-        if ($hasMissingBlock) {
-            Write-Host "  [OK] missing-command profile shims block present in $profilePath" -ForegroundColor Green
+        if ($script:DryRun) {
+            Write-Host "  [INFO] Skipping profile block presence check in -DryRun mode." -ForegroundColor DarkGray
+            Write-Host "  [INFO] Skipping managed fast shim file existence check in -DryRun mode." -ForegroundColor DarkGray
         }
         else {
-            Write-Host "  [FAIL] missing-command profile shims block not found in $profilePath" -ForegroundColor Red
-        }
+            $profileText = Get-Content -Path $profilePath -Raw -ErrorAction SilentlyContinue
+            $hasFastBlock = $profileText -and $profileText.Contains("# >>> unix-tools-fast-shims >>>") -and $profileText.Contains("# <<< unix-tools-fast-shims <<<")
 
-        if ($hasAliasBlock) {
-            Write-Host "  [OK] alias-compat profile shims block present in $profilePath" -ForegroundColor Green
-        }
-        else {
-            Write-Host "  [FAIL] alias-compat profile shims block not found in $profilePath" -ForegroundColor Red
+            if ($hasFastBlock) {
+                Write-Host "  [OK] fast-shim bootstrap block present in $profilePath" -ForegroundColor Green
+            }
+            else {
+                Write-Host "  [FAIL] fast-shim bootstrap block not found in $profilePath" -ForegroundColor Red
+            }
+
+            $managedFastPath = $null
+            try {
+                $managedFastPath = Get-FastShimManagedPath
+            }
+            catch {
+                Write-Host "  [FAIL] Unable to resolve managed fast shim path: $($_.Exception.Message)" -ForegroundColor Red
+            }
+
+            if ($managedFastPath) {
+                if (Test-Path -LiteralPath $managedFastPath -PathType Leaf) {
+                    Write-Host "  [OK] managed fast shim script present: $managedFastPath" -ForegroundColor Green
+                }
+                else {
+                    Write-Host "  [FAIL] managed fast shim script missing: $managedFastPath" -ForegroundColor Red
+                }
+            }
         }
     }
 
@@ -3114,10 +3252,18 @@ try {
         }
     }
     if ($InstallProfileShims) {
-        Write-Host "- Missing-command profile shims installed for core wrappers (export, grep/rg, file/text helpers, alias compat) plus generic fallback stubs for every command in the shim catalog when executable is missing." -ForegroundColor Cyan
-        Write-Host "- Alias-compat wrappers installed for common commands: rm, cp, mv, mkdir, ls, cat, sort, diff, tee, sleep" -ForegroundColor Cyan
-        Write-Host "- Profile shims are idempotent and stored in marker blocks under your profile" -ForegroundColor Cyan
-        Write-Host "- Coverage report command: Show-UnixCoverageReport -IncludeMissing" -ForegroundColor Cyan
+        Write-Host "- Profile bootstrap block installed under marker: unix-tools-fast-shims" -ForegroundColor Cyan
+        $managedFastPathNote = $null
+        try {
+            $managedFastPathNote = Get-FastShimManagedPath
+        }
+        catch {
+            $managedFastPathNote = $null
+        }
+        if ($managedFastPathNote) {
+            Write-Host "- Managed fast shim script path: $managedFastPathNote" -ForegroundColor Cyan
+        }
+        Write-Host "- Re-run -InstallProfileShims after updating Enable-UnixToolsFast.ps1 to refresh the managed copy." -ForegroundColor Cyan
     }
     if ($InstallOptionalTools) {
         Write-Host "- Optional tool auto-install attempted via winget/choco/scoop for missing commands." -ForegroundColor Cyan
@@ -3137,7 +3283,6 @@ try {
         Write-Host "   'stressed' | rev" -ForegroundColor Cyan
         Write-Host "   rm -rf .\tmp" -ForegroundColor Cyan
         Write-Host "   ls -la" -ForegroundColor Cyan
-        Write-Host "   Show-UnixCoverageReport -IncludeMissing" -ForegroundColor Cyan
     }
     if ($InstallOptionalTools) {
         Write-Host "   rg --version" -ForegroundColor Cyan
