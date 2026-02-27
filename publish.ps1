@@ -679,7 +679,13 @@ if ([string]::IsNullOrWhiteSpace($NuGetApiKey)) {
     $NuGetApiKey = Read-Host 'PowerShell Gallery NuGet API key'
 }
 if ([string]::IsNullOrWhiteSpace($NuGetApiKey)) {
-    throw 'NuGet API key is required.'
+    Write-Host ''
+    Write-Host 'Publish was not started.' -ForegroundColor Red
+    Write-Host '- Missing required input: NuGet API key' -ForegroundColor Red
+    Write-Host '  Enter a valid PowerShell Gallery API key when prompted.' -ForegroundColor DarkGray
+    Write-Host '  Get or rotate keys at: https://www.powershellgallery.com/account/apikeys' -ForegroundColor Yellow
+    Write-Host ''
+    return
 }
 
 Write-Host ''
