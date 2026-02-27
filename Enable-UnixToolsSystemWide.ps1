@@ -1,3 +1,4 @@
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Adds Unix-compatible tools (grep, sed, awk, etc.) to the Windows system PATH.
@@ -105,7 +106,7 @@
 #   .\Enable-UnixToolsSystemWide.ps1 -InstallProfileShims -LogPath C:\Temp\unix-tools-install.log
 #   .\Enable-UnixToolsSystemWide.ps1 -Uninstall
 
-[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium', DefaultParameterSetName = 'Default')]
 param(
     [switch]$CreateShims,
     [switch]$AddMingw,
@@ -129,8 +130,9 @@ $script:PathScope = if ($UserScope) { "User" } else { "Machine" }
 $script:PathDisplay = "$($script:PathScope) PATH"
 $script:DryRun = $DryRun.IsPresent
 
-# Ensure TLS 1.2+ for all web requests (older systems may default to TLS 1.0/1.1).
-[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+# Enforce TLS 1.2+ only for all web requests (drops insecure TLS 1.0/1.1).
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls13 } catch {}
 
 # Default to non-interactive behavior unless caller explicitly asks for confirmation.
 if (-not $PSBoundParameters.ContainsKey('Confirm')) {
@@ -144,12 +146,28 @@ function Invoke-NativeCommand {
     .SYNOPSIS
         Runs a native executable and returns its exit code reliably.
         Avoids stale $LASTEXITCODE from previous commands.
+        Use -WarnOnStderr to log stderr lines as warnings.
     #>
     param(
         [Parameter(Mandatory = $true)][string]$Command,
         [Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments
     )
-    & $Command @Arguments
+    # Note: WarnOnStderr is extracted manually to avoid interfering with ValueFromRemainingArguments.
+    $warnOnStderr = $false
+    if ($Arguments -and $Arguments -contains '-WarnOnStderr') {
+        $warnOnStderr = $true
+        $Arguments = @($Arguments | Where-Object { $_ -ne '-WarnOnStderr' })
+    }
+    if ($warnOnStderr) {
+        $output = & $Command @Arguments 2>&1
+        $stderr = @($output | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $stdout = @($output | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
+        $stdout
+        foreach ($line in $stderr) { Write-Warning "[$Command stderr] $line" }
+    }
+    else {
+        & $Command @Arguments
+    }
     return $LASTEXITCODE
 }
 
@@ -157,7 +175,12 @@ function Backup-PathVariable {
     param([string]$Scope = "Machine")
     $current = [Environment]::GetEnvironmentVariable("Path", $Scope)
     if ([string]::IsNullOrWhiteSpace($current)) { return }
-    $backupDir = Join-Path $env:ProgramData "UnixToolsSystemWide"
+    $backupDir = if ($Scope -eq "User") {
+        Join-Path (if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:USERPROFILE }) "UnixToolsSystemWide"
+    }
+    else {
+        Join-Path $env:ProgramData "UnixToolsSystemWide"
+    }
     New-Item -ItemType Directory -Path $backupDir -Force -ErrorAction SilentlyContinue | Out-Null
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $file = Join-Path $backupDir "path-backup-$Scope-$stamp.txt"
@@ -255,7 +278,7 @@ function Assert-PathLength([string]$PathValue, [string]$Scope = "Machine") {
 function Add-MachinePathPrepend([string]$pathToPrepend) {
     $scope = $script:PathScope
     $norm = $pathToPrepend.Trim().TrimEnd('\')
-    if (-not (Test-Path $norm)) {
+    if (-not $script:DryRun -and -not (Test-Path $norm)) {
         throw "Path does not exist: $norm"
     }
 
@@ -620,8 +643,14 @@ function Write-OptionalToolState([object[]]$Records) {
     else {
         # Atomic write: write to temp file then rename to avoid partial writes on crash.
         $tmp = "$statePath.tmp"
-        Set-Content -Path $tmp -Value $json -Encoding UTF8
-        Move-Item -Path $tmp -Destination $statePath -Force
+        try {
+            Set-Content -Path $tmp -Value $json -Encoding UTF8
+            Move-Item -Path $tmp -Destination $statePath -Force
+        }
+        catch {
+            Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
+            throw
+        }
     }
 }
 
@@ -826,11 +855,19 @@ function Uninstall-TrackedOptionalTools {
 
 function Start-ScriptTranscript([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
-    $dir = Split-Path -Parent $Path
+    # Validate LogPath does not point inside Windows system directories.
+    $resolved = [System.IO.Path]::GetFullPath($Path)
+    $sensitiveRoots = @($env:WINDIR, $env:SYSTEMROOT) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+    foreach ($root in $sensitiveRoots) {
+        if ($resolved.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "LogPath must not point inside the Windows system directory: $resolved"
+        }
+    }
+    $dir = Split-Path -Parent $resolved
     if ($dir -and -not (Test-Path $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
-    Start-Transcript -Path $Path -Append -Force | Out-Null
+    Start-Transcript -Path $resolved -Append -Force | Out-Null
     return $true
 }
 
@@ -947,8 +984,14 @@ function Upsert-ProfileBlock {
     else {
         # Atomic write: write to temp file then rename to avoid partial writes on crash.
         $tmp = "$ProfilePath.tmp"
-        Set-Content -Path $tmp -Value $updated -Encoding UTF8
-        Move-Item -Path $tmp -Destination $ProfilePath -Force
+        try {
+            Set-Content -Path $tmp -Value $updated -Encoding UTF8
+            Move-Item -Path $tmp -Destination $ProfilePath -Force
+        }
+        catch {
+            Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
+            throw
+        }
     }
 }
 
@@ -980,8 +1023,14 @@ function Remove-ProfileBlock {
         else {
             # Atomic write: temp+rename to prevent partial writes.
             $tmp = "$ProfilePath.tmp"
-            Set-Content -Path $tmp -Value $updated -Encoding UTF8
-            Move-Item -Path $tmp -Destination $ProfilePath -Force
+            try {
+                Set-Content -Path $tmp -Value $updated -Encoding UTF8
+                Move-Item -Path $tmp -Destination $ProfilePath -Force
+            }
+            catch {
+                Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
+                throw
+            }
         }
     }
 }
@@ -1020,8 +1069,14 @@ function Remove-ManagedProfileBlocks {
     else {
         # Atomic write: temp+rename to prevent partial writes.
         $tmp = "$ProfilePath.tmp"
-        Set-Content -Path $tmp -Value $updated -Encoding UTF8
-        Move-Item -Path $tmp -Destination $ProfilePath -Force
+        try {
+            Set-Content -Path $tmp -Value $updated -Encoding UTF8
+            Move-Item -Path $tmp -Destination $ProfilePath -Force
+        }
+        catch {
+            Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
+            throw
+        }
     }
 }
 
@@ -1625,6 +1680,11 @@ Add-UnixShimIfMissing -Name "source" -Body {
     if ($ArgList.Count -eq 0) { throw "usage: source <script> [args...]" }
     $path = $ArgList[0]
     if (-not (Test-Path $path)) { throw "source: file not found: $path" }
+    # Canonicalize path to prevent traversal attacks.
+    $path = (Resolve-Path -LiteralPath $path -ErrorAction Stop).Path
+    if (-not $path.EndsWith('.ps1') -and -not $path.EndsWith('.psm1')) {
+        Write-Warning "source: dot-sourcing non-PowerShell file: $path"
+    }
     $rest = @()
     if ($ArgList.Count -gt 1) { $rest = $ArgList[1..($ArgList.Count - 1)] }
     . $path @rest
@@ -1654,12 +1714,19 @@ Add-UnixShimIfMissing -Name "make" -Body {
 
 Add-UnixShimIfMissing -Name "open" -Body {
     $ArgList = @($args)
+    # Block potentially dangerous URI schemes.
+    $dangerousSchemes = @('javascript', 'vbscript', 'data', 'shell')
     if ($ArgList.Count -eq 0) {
         Write-Verbose "open: launching current directory"
         Start-Process -FilePath "."
         return
     }
     foreach ($target in $ArgList) {
+        foreach ($scheme in $dangerousSchemes) {
+            if ($target -match "^${scheme}:") {
+                throw "open: blocked potentially dangerous URI scheme '${scheme}:'"
+            }
+        }
         Write-Verbose "open: launching '$target'"
         Start-Process -FilePath $target
     }
@@ -1734,12 +1801,14 @@ Add-UnixShimIfMissing -Name "at" -Body {
     $ArgList = @($args)
     if ($ArgList.Count -lt 2) { throw "usage: at HH:mm <command...>" }
     $time = $ArgList[0]
-    if ($time -notmatch '^\d{1,2}:\d{2}$') { throw "at: time format must be HH:mm" }
+    # Strict 24-hour time validation to prevent injection via /ST parameter.
+    if ($time -notmatch '^([01]\d|2[0-3]):[0-5]\d$') { throw "at: time format must be HH:mm (24-hour, e.g. 09:30 or 14:00)" }
     $commandText = ($ArgList[1..($ArgList.Count - 1)] -join " ")
     $taskName = "unix-at-" + ([guid]::NewGuid().ToString("N").Substring(0, 8))
-    # Wrap command so the scheduled task self-deletes after execution.
-    $wrappedCommand = "cmd /c $commandText ^& schtasks /Delete /TN $taskName /F"
-    & schtasks /Create /SC ONCE /TN $taskName /TR $wrappedCommand /ST $time /F | Out-Null
+    # Properly quote the command to prevent injection via schtasks /TR.
+    $escapedCmd = $commandText -replace '"', '\"'
+    $wrappedCommand = "cmd /c `"$escapedCmd`" & schtasks /Delete /TN $taskName /F"
+    & schtasks /Create /SC ONCE /TN $taskName /TR "`"$wrappedCommand`"" /ST $time /F | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "at: failed to create scheduled task." }
     Write-Output $taskName
 }
@@ -1752,6 +1821,10 @@ Add-UnixShimIfMissing -Name "bc" -Body {
     $ArgList = @($args)
     $expr = if ($ArgList.Count -gt 0) { $ArgList -join " " } else { ($input | Out-String).Trim() }
     if ([string]::IsNullOrWhiteSpace($expr)) { throw "usage: bc <expression>" }
+    # Validate expression against a safe allowlist (digits, operators, parens, decimal).
+    if ($expr -notmatch '^[\d\s\+\-\*/\(\)\.,]+$') {
+        throw "bc: expression contains disallowed characters (only digits, operators, parens, decimal allowed)"
+    }
     $table = New-Object System.Data.DataTable
     $result = $table.Compute($expr, $null)
     Write-Output $result
@@ -1782,6 +1855,8 @@ Add-UnixShimIfMissing -Name "base64" -Body {
         $clean = ($encoded -replace '\s+', '')
         if ([string]::IsNullOrWhiteSpace($clean)) { return }
         [byte[]]$decodedBytes = [Convert]::FromBase64String($clean)
+        # WARNING: Writes raw decoded bytes to stdout. This matches Unix base64 -d behavior
+        # but callers should be aware that arbitrary binary content may be emitted.
         $stdout = [Console]::OpenStandardOutput()
         $stdout.Write($decodedBytes, 0, $decodedBytes.Length)
         return
@@ -2248,6 +2323,7 @@ Set-UnixCommand -Name "rm" -Fallback {
         }
     }
     if ($paths.Count -eq 0) { throw "usage: rm [-rf] [--] <path...>" }
+    Write-Verbose "rm: removing $($paths.Count) path(s): $($paths -join ', ') (recurse=$recurse, force=$force)"
     Remove-Item -Path $paths -Recurse:$recurse -Force:$force
 }
 
@@ -2648,6 +2724,9 @@ if ($Help) {
 if ($InstallFull -and $Uninstall) {
     throw "Cannot combine -InstallFull with -Uninstall. Choose one mode."
 }
+if ($Uninstall -and ($CreateShims -or $AddMingw -or $AddGitCmd -or $InstallProfileShims -or $InstallOptionalTools)) {
+    throw "Cannot combine -Uninstall with install switches. Use -Uninstall alone."
+}
 
 if ($InstallFull) {
     $AddMingw = $true
@@ -2937,6 +3016,26 @@ try {
             }
 
             Add-MachinePathPrepend $shimDir
+
+            # Fix #6: Set restrictive ACLs on the shim directory.
+            if (-not $script:DryRun) {
+                try {
+                    if ($script:PathScope -eq "User") {
+                        & icacls $shimDir /inheritance:r /grant "${env:USERNAME}:(OI)(CI)F" 2>&1 | Out-Null
+                    }
+                    else {
+                        & icacls $shimDir /inheritance:r /grant "BUILTIN\Administrators:(OI)(CI)F" /grant "BUILTIN\Users:(OI)(CI)RX" 2>&1 | Out-Null
+                    }
+                    Write-Host "[OK] Set restrictive ACLs on shim directory" -ForegroundColor Green
+                }
+                catch {
+                    Write-Warning "Could not set ACLs on shim directory: $($_.Exception.Message)"
+                }
+            }
+            else {
+                Write-Host "[DRYRUN] icacls '$shimDir' /inheritance:r /grant ..." -ForegroundColor DarkGray
+            }
+
             $didChange = $true
             Write-Host "[OK] Created $shimmed shims in $shimDir (stale shims cleared first)" -ForegroundColor Green
             Write-Host "[OK] Shim directory prepended to $($script:PathDisplay) (takes priority)" -ForegroundColor Green
@@ -2961,18 +3060,30 @@ try {
         Write-Host "`n=== Step 2b: Install inline profile shims ===" -ForegroundColor Yellow
         if ($PSCmdlet.ShouldProcess($PROFILE.CurrentUserCurrentHost, "Install/update unix-tools profile shim blocks")) {
             $profileShimMode = Install-ProfileInlineShims
+            # Capture hash immediately after writing so we can detect tampering before reload.
+            $profilePath = $PROFILE.CurrentUserCurrentHost
+            $expectedHash = $null
+            if (Test-Path $profilePath) {
+                $expectedHash = (Get-FileHash -Path $profilePath -Algorithm SHA256).Hash
+            }
             # Guard: skip profile reload when running elevated to avoid executing
             # potentially-tampered profile content with admin privileges.
             $isElevated = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
             try {
-                $profilePath = $PROFILE.CurrentUserCurrentHost
                 if (Test-Path $profilePath) {
                     if ($isElevated) {
                         Write-Warning "Skipping automatic profile reload in elevated session for safety. Open a new terminal or run '. `$PROFILE' manually."
                     }
                     else {
-                        . $profilePath
-                        Write-Host "[OK] Reloaded profile in current session (. `$PROFILE)" -ForegroundColor Green
+                        # Fix #4: Hash-verify profile before reload to prevent TOCTOU attacks.
+                        $currentHash = (Get-FileHash -Path $profilePath -Algorithm SHA256).Hash
+                        if ($expectedHash -and $currentHash -ne $expectedHash) {
+                            Write-Warning "Profile file was modified after writing. Skipping reload for safety."
+                        }
+                        else {
+                            . $profilePath
+                            Write-Host "[OK] Reloaded profile in current session (. `$PROFILE)" -ForegroundColor Green
+                        }
                     }
                 }
             }
