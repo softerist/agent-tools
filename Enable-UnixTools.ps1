@@ -125,7 +125,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$ScriptVersion = "2.2.1"
+$ScriptVersion = "2.2.3"
 $script:PathScope = if ($UserScope) { "User" } else { "Machine" }
 $script:PathDisplay = "$($script:PathScope) PATH"
 $script:DryRun = $DryRun.IsPresent
@@ -391,15 +391,21 @@ function Assert-Admin {
         if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
             Write-Warning "Running in UserScope mode (admin not required)."
         }
-        return
+        return $true
     }
     if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         if ($script:DryRun) {
             Write-Warning "Running in DryRun mode (admin checks relaxed)."
-            return
+            return $true
         }
-        throw "Please run PowerShell as Administrator, or use -UserScope."
+        Write-Section "Prerequisites"
+        Write-Status -Type fail -Label "Administrator required" -Detail "Machine scope needs elevation"
+        Write-Dim "Run one of these commands:" -Indent
+        Write-Dim "Start-Process pwsh -Verb RunAs" -Indent
+        Write-Dim "Enable-UnixTools -InstallFull -UserScope" -Indent
+        return $false
     }
+    return $true
 }
 
 function Get-GitRoot {
@@ -2955,7 +2961,10 @@ try {
     $installMode = if ($InstallFull) { "Full install" } elseif ($Uninstall) { "Uninstall" } else { "Custom" }
     Write-Header -Mode $installMode
 
-    Assert-Admin
+    if (-not (Assert-Admin)) {
+        Write-Footer -Message "Stopped before making changes" -Type fail
+        return
+    }
 
     # Backup current PATH before any mutations.
     if (-not $script:DryRun) {
