@@ -1319,6 +1319,7 @@ function Install-ProfileInlineShims {
     Remove-InstalledProfileShims
     Install-ProfileMissingShims
     Install-ProfileAliasCompat
+    Write-Status -Type ok -Label "Profile blocks" -Detail "inline (missing + alias-compat) -> $profilePath"
     return "inline"
 }
 
@@ -2202,6 +2203,7 @@ __UNIX_GENERIC_FALLBACK_BLOCK__
 
     Remove-ProfileBlock -ProfilePath $profilePath -StartMarker $legacyStart -EndMarker $legacyEnd
     Upsert-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody
+    Write-Status -Type ok -Label "Profile blocks" -Detail "missing-shims updated -> $profilePath"
 }
 
 function Install-ProfileAliasCompat {
@@ -2921,7 +2923,7 @@ Set-UnixCommand -Name "sleep" -Fallback {
 
     Remove-ProfileBlock -ProfilePath $profilePath -StartMarker $legacyStart -EndMarker $legacyEnd
     Upsert-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody
-    Write-Host "[OK] Installed/updated alias-compat profile shims in: $profilePath" -ForegroundColor Green
+    Write-Status -Type ok -Label "Profile blocks" -Detail "alias-compat updated -> $profilePath"
 }
 
 # ======================== Main Script ========================
