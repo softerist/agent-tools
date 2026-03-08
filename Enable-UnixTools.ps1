@@ -1391,25 +1391,23 @@ function Add-UnixShimIfMissing {
 
     $fb = $Body
     $wrapper = {
-        param([Parameter(ValueFromRemainingArguments = $true)] $Args)
-
         $commandName = $MyInvocation.MyCommand.Name
         $app = Get-UnixShimExecutable -Name $commandName
         if ($app) {
             if ($MyInvocation.ExpectingInput) {
-                $input | & $app.Source @Args
+                $input | & $app.Source @args
             }
             else {
-                & $app.Source @Args
+                & $app.Source @args
             }
             return
         }
 
         if ($MyInvocation.ExpectingInput) {
-            $input | & $fb @Args
+            $input | & $fb @args
         }
         else {
-            & $fb @Args
+            & $fb @args
         }
     }.GetNewClosure()
 
@@ -2264,25 +2262,23 @@ function Set-UnixCommand {
     Reset-UnixShimName -Name $Name
     $fb = $Fallback
     $wrapper = {
-        param([Parameter(ValueFromRemainingArguments = $true)] $Args)
-
         $commandName = $MyInvocation.MyCommand.Name
         $app = Get-UnixShimExecutable -Name $commandName
         if ($app) {
             if ($MyInvocation.ExpectingInput) {
-                $input | & $app.Source @Args
+                $input | & $app.Source @args
             }
             else {
-                & $app.Source @Args
+                & $app.Source @args
             }
             return
         }
 
         if ($MyInvocation.ExpectingInput) {
-            $input | & $fb @Args
+            $input | & $fb @args
         }
         else {
-            & $fb @Args
+            & $fb @args
         }
     }.GetNewClosure()
 
