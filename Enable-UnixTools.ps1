@@ -1666,12 +1666,10 @@ Add-UnixShimIfMissing -Name "fgrep" -Body {
 }
 
 Add-UnixShimIfMissing -Name "rgf" -Body {
-    param(
-        [Parameter(Mandatory = $true, Position = 0)]
-        [string]$Pattern,
-        [Parameter(ValueFromRemainingArguments = $true)]
-        [string[]]$Rest
-    )
+    $Pattern = $args[0]
+    if (-not $Pattern) { throw "rgf: pattern required. Usage: rgf <pattern> [path ...]" }
+    $Rest = @()
+    if ($args.Count -gt 1) { $Rest = $args[1..($args.Count - 1)] }
     $rg = Get-Command rg -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $rg) {
         throw "rgf: ripgrep 'rg' not found. Install with -InstallOptionalTools or winget install --id BurntSushi.ripgrep.MSVC --exact."
