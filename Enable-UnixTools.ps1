@@ -391,15 +391,20 @@ function Assert-Admin {
         if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
             Write-Warning "Running in UserScope mode (admin not required)."
         }
-        return
+        return $true
     }
     if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         if ($script:DryRun) {
             Write-Warning "Running in DryRun mode (admin checks relaxed)."
-            return
+            return $true
         }
-        throw "Please run PowerShell as Administrator, or use -UserScope."
+        Write-Footer -Type fail -Message "Administrator rights are required for Machine scope."
+        Write-Host "  Re-run PowerShell as Administrator, or use -UserScope." -ForegroundColor DarkGray
+        Write-Host "  Example: .\Enable-UnixTools.ps1 -InstallFull -UserScope" -ForegroundColor DarkGray
+        Write-Host ""
+        return $false
     }
+    return $true
 }
 
 function Get-GitRoot {
@@ -2955,7 +2960,9 @@ try {
     $installMode = if ($InstallFull) { "Full install" } elseif ($Uninstall) { "Uninstall" } else { "Custom" }
     Write-Header -Mode $installMode
 
-    Assert-Admin
+    if (-not (Assert-Admin)) {
+        return
+    }
 
     # Backup current PATH before any mutations.
     if (-not $script:DryRun) {
