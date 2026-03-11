@@ -125,7 +125,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$ScriptVersion = "2.2.1"
+$ScriptVersion = "2.2.4"
 $script:PathScope = if ($UserScope) { "User" } else { "Machine" }
 $script:PathDisplay = "$($script:PathScope) PATH"
 $script:DryRun = $DryRun.IsPresent
@@ -391,6 +391,7 @@ function Assert-Admin {
         if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
             Write-Warning "Running in UserScope mode (admin not required)."
         }
+        return $true
         return $true
     }
     if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -1390,25 +1391,23 @@ function Add-UnixShimIfMissing {
 
     $fb = $Body
     $wrapper = {
-        param([Parameter(ValueFromRemainingArguments = $true)] $Args)
-
         $commandName = $MyInvocation.MyCommand.Name
         $app = Get-UnixShimExecutable -Name $commandName
         if ($app) {
             if ($MyInvocation.ExpectingInput) {
-                $input | & $app.Source @Args
+                $input | & $app.Source @args
             }
             else {
-                & $app.Source @Args
+                & $app.Source @args
             }
             return
         }
 
         if ($MyInvocation.ExpectingInput) {
-            $input | & $fb @Args
+            $input | & $fb @args
         }
         else {
-            & $fb @Args
+            & $fb @args
         }
     }.GetNewClosure()
 
@@ -1667,12 +1666,10 @@ Add-UnixShimIfMissing -Name "fgrep" -Body {
 }
 
 Add-UnixShimIfMissing -Name "rgf" -Body {
-    param(
-        [Parameter(Mandatory = $true, Position = 0)]
-        [string]$Pattern,
-        [Parameter(ValueFromRemainingArguments = $true)]
-        [string[]]$Rest
-    )
+    $Pattern = $args[0]
+    if (-not $Pattern) { throw "rgf: pattern required. Usage: rgf <pattern> [path ...]" }
+    $Rest = @()
+    if ($args.Count -gt 1) { $Rest = $args[1..($args.Count - 1)] }
     $rg = Get-Command rg -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $rg) {
         throw "rgf: ripgrep 'rg' not found. Install with -InstallOptionalTools or winget install --id BurntSushi.ripgrep.MSVC --exact."
@@ -2263,25 +2260,23 @@ function Set-UnixCommand {
     Reset-UnixShimName -Name $Name
     $fb = $Fallback
     $wrapper = {
-        param([Parameter(ValueFromRemainingArguments = $true)] $Args)
-
         $commandName = $MyInvocation.MyCommand.Name
         $app = Get-UnixShimExecutable -Name $commandName
         if ($app) {
             if ($MyInvocation.ExpectingInput) {
-                $input | & $app.Source @Args
+                $input | & $app.Source @args
             }
             else {
-                & $app.Source @Args
+                & $app.Source @args
             }
             return
         }
 
         if ($MyInvocation.ExpectingInput) {
-            $input | & $fb @Args
+            $input | & $fb @args
         }
         else {
-            & $fb @Args
+            & $fb @args
         }
     }.GetNewClosure()
 

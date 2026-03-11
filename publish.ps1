@@ -171,6 +171,172 @@ function Add-ModulePathIfMissing([string]$ModuleRoot) {
     }
 }
 
+function Get-DotNetNuGetSources {
+    $output = @(& dotnet nuget list source 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        $joined = ($output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+        throw "dotnet nuget list source failed.`n$joined"
+    }
+
+    $sources = New-Object System.Collections.Generic.List[object]
+    $currentName = $null
+    $currentEnabled = $false
+    foreach ($line in $output) {
+        $text = ([string]$line).TrimEnd()
+        if ($text -match '^\s*\d+\.\s+(.+?)\s+\[(Enabled|Disabled)\]\s*$') {
+            $currentName = $matches[1].Trim()
+            $currentEnabled = $matches[2].Equals('Enabled', [StringComparison]::OrdinalIgnoreCase)
+            continue
+        }
+        if ($currentName -and $text -match '^\s*(https?://\S+)\s*$') {
+            $sources.Add([pscustomobject]@{
+                    Name    = $currentName
+                    Enabled = $currentEnabled
+                    Url     = $matches[1].Trim()
+                }) | Out-Null
+            $currentName = $null
+            $currentEnabled = $false
+        }
+    }
+    return $sources.ToArray()
+}
+
+function New-PrereqIssue {
+    param(
+        [Parameter(Mandatory = $true)][string]$Title,
+        [Parameter(Mandatory = $true)][string]$Detail,
+        [string[]]$FixCommands = @()
+    )
+
+    return [pscustomobject]@{
+        Title       = $Title
+        Detail      = $Detail
+        FixCommands = @($FixCommands | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+}
+
+function Test-PublishPrerequisites {
+    $issues = New-Object System.Collections.Generic.List[object]
+
+    $dotnetCmd = Get-Command dotnet -ErrorAction SilentlyContinue
+    if (-not $dotnetCmd) {
+        $issues.Add((New-PrereqIssue `
+                    -Title 'Missing .NET SDK (dotnet)' `
+                    -Detail 'Publish-Module uses dotnet pack internally. dotnet was not found on PATH.' `
+                    -FixCommands @(
+                        'winget install --id Microsoft.DotNet.SDK.10 --exact --accept-package-agreements --accept-source-agreements',
+                        'dotnet --info'
+                    ))) | Out-Null
+        return [pscustomobject]@{
+            Ready  = $false
+            Issues = $issues.ToArray()
+        }
+    }
+
+    $nugetUrl = 'https://api.nuget.org/v3/index.json'
+    $normalizedNugetUrl = $nugetUrl.TrimEnd('/')
+    $sources = @()
+    try {
+        $sources = @(Get-DotNetNuGetSources)
+    }
+    catch {
+        $issues.Add((New-PrereqIssue `
+                    -Title 'Unable to read dotnet NuGet sources' `
+                    -Detail $_.Exception.Message `
+                    -FixCommands @(
+                        'dotnet nuget list source',
+                        'dotnet nuget add source https://api.nuget.org/v3/index.json -n nuget.org'
+                    ))) | Out-Null
+        return [pscustomobject]@{
+            Ready  = $false
+            Issues = $issues.ToArray()
+        }
+    }
+
+    $nugetEntry = $sources | Where-Object {
+        $_.Url -and $_.Url.TrimEnd('/').Equals($normalizedNugetUrl, [StringComparison]::OrdinalIgnoreCase)
+    } | Select-Object -First 1
+
+    if (-not $nugetEntry) {
+        Write-Info "Auto-fix: adding dotnet NuGet source '$nugetUrl' as 'nuget.org'..."
+        & dotnet nuget add source $nugetUrl -n nuget.org | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            $issues.Add((New-PrereqIssue `
+                        -Title 'Missing dotnet NuGet source: nuget.org' `
+                        -Detail "No source found for $nugetUrl, and automatic add failed." `
+                        -FixCommands @(
+                            'dotnet nuget add source https://api.nuget.org/v3/index.json -n nuget.org',
+                            'dotnet nuget list source'
+                        ))) | Out-Null
+        }
+    }
+    elseif (-not $nugetEntry.Enabled) {
+        Write-Info "Auto-fix: enabling dotnet NuGet source '$($nugetEntry.Name)'..."
+        & dotnet nuget enable source $nugetEntry.Name | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            $issues.Add((New-PrereqIssue `
+                        -Title "Disabled dotnet NuGet source: $($nugetEntry.Name)" `
+                        -Detail "The source URL is present but disabled, and automatic enable failed: $($nugetEntry.Url)" `
+                        -FixCommands @(
+                            "dotnet nuget enable source `"$($nugetEntry.Name)`"",
+                            'dotnet nuget list source'
+                        ))) | Out-Null
+        }
+    }
+
+    return [pscustomobject]@{
+        Ready  = ($issues.Count -eq 0)
+        Issues = $issues.ToArray()
+    }
+}
+
+function Write-PrereqFailures {
+    param(
+        [Parameter(Mandatory = $true)][object[]]$Issues
+    )
+
+    Write-Host ''
+    Write-Host 'Preflight failed. Publish was not started.' -ForegroundColor Red
+    foreach ($issue in $Issues) {
+        Write-Host "- $($issue.Title)" -ForegroundColor Red
+        Write-Host "  $($issue.Detail)" -ForegroundColor DarkGray
+        if ($issue.FixCommands -and $issue.FixCommands.Count -gt 0) {
+            Write-Host '  Fix:' -ForegroundColor Yellow
+            foreach ($cmd in $issue.FixCommands) {
+                Write-Host "    $cmd" -ForegroundColor Yellow
+            }
+        }
+    }
+    Write-Host ''
+}
+
+function Write-PublishFailure {
+    param(
+        [Parameter(Mandatory = $true)][string]$Title,
+        [Parameter(Mandatory = $true)][string]$Detail,
+        [string[]]$FixCommands = @(),
+        [string]$RawError
+    )
+
+    Write-Host ''
+    Write-Host 'Publish failed. Package was not uploaded.' -ForegroundColor Red
+    Write-Host "- $Title" -ForegroundColor Red
+    Write-Host "  $Detail" -ForegroundColor DarkGray
+    if ($FixCommands -and $FixCommands.Count -gt 0) {
+        Write-Host '  Fix:' -ForegroundColor Yellow
+        foreach ($cmd in $FixCommands) {
+            if (-not [string]::IsNullOrWhiteSpace($cmd)) {
+                Write-Host "    $cmd" -ForegroundColor Yellow
+            }
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($RawError)) {
+        $singleLine = ($RawError -replace '\s+', ' ').Trim()
+        Write-Verbose "Raw publish error: $singleLine"
+    }
+    Write-Host ''
+}
+
 function Import-RequiredModuleVersion {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -319,28 +485,36 @@ function New-ModulePackage {
     $psm1Path = Join-Path $moduleDir ("{0}.psm1" -f $Name)
     $manifestPath = Join-Path $moduleDir ("{0}.psd1" -f $Name)
 
-    $wrapper = @(
-        '#Requires -Version 5.1'
-        ''
-        "function $Name {"
-        '    [CmdletBinding(PositionalBinding = $false)]'
-        '    param('
-        '        [Parameter(ValueFromRemainingArguments = $true)]'
-        '        [object[]]$ArgumentList'
-        '    )'
-        ''
-        "    `$scriptPath = Join-Path -Path `$PSScriptRoot -ChildPath '$sourceLeaf'"
-        '    if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {'
-        '        throw "Installer script not found: $scriptPath"'
-        '    }'
-        ''
-        '    & $scriptPath @ArgumentList'
-        '}'
-        ''
-        "Export-ModuleMember -Function '$Name'"
-    ) -join "`r`n"
+    $sourceDir = Split-Path -Parent $SourceScript
+    $sourceBaseName = [System.IO.Path]::GetFileNameWithoutExtension($SourceScript)
+    $sourceWrapperPath = Join-Path $sourceDir ("{0}.psm1" -f $sourceBaseName)
+    if ($sourceBaseName -eq $Name -and (Test-Path -LiteralPath $sourceWrapperPath -PathType Leaf)) {
+        Copy-Item -LiteralPath $sourceWrapperPath -Destination $psm1Path -Force
+    }
+    else {
+        $wrapper = @(
+            '#Requires -Version 5.1'
+            ''
+            "function $Name {"
+            '    [CmdletBinding(PositionalBinding = $false)]'
+            '    param('
+            '        [Parameter(ValueFromRemainingArguments = $true)]'
+            '        [object[]]$ArgumentList'
+            '    )'
+            ''
+            "    `$scriptPath = Join-Path -Path `$PSScriptRoot -ChildPath '$sourceLeaf'"
+            '    if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {'
+            '        throw "Installer script not found: $scriptPath"'
+            '    }'
+            ''
+            '    & $scriptPath @ArgumentList'
+            '}'
+            ''
+            "Export-ModuleMember -Function '$Name'"
+        ) -join "`r`n"
 
-    Set-Content -LiteralPath $psm1Path -Value $wrapper -Encoding UTF8
+        Set-Content -LiteralPath $psm1Path -Value $wrapper -Encoding UTF8
+    }
 
     if (-not $ModuleTags -or $ModuleTags.Count -eq 0) {
         $ModuleTags = @('unix', 'windows', 'path', 'shims', 'cli')
@@ -389,6 +563,14 @@ function New-ModulePackage {
 }
 
 Write-Step 'PowerShell Gallery Interactive Publisher'
+
+Write-Step 'Running preflight checks'
+$preflight = Test-PublishPrerequisites
+if (-not $preflight.Ready) {
+    Write-PrereqFailures -Issues $preflight.Issues
+    return
+}
+Write-Info 'Preflight checks passed.'
 
 if ([string]::IsNullOrWhiteSpace($SourceScriptPath)) {
     $defaultScript = Join-Path $PSScriptRoot 'Enable-UnixTools.ps1'
@@ -497,7 +679,13 @@ if ([string]::IsNullOrWhiteSpace($NuGetApiKey)) {
     $NuGetApiKey = Read-Host 'PowerShell Gallery NuGet API key'
 }
 if ([string]::IsNullOrWhiteSpace($NuGetApiKey)) {
-    throw 'NuGet API key is required.'
+    Write-Host ''
+    Write-Host 'Publish was not started.' -ForegroundColor Red
+    Write-Host '- Missing required input: NuGet API key' -ForegroundColor Red
+    Write-Host '  Enter a valid PowerShell Gallery API key when prompted.' -ForegroundColor DarkGray
+    Write-Host '  Get or rotate keys at: https://www.powershellgallery.com/account/apikeys' -ForegroundColor Yellow
+    Write-Host ''
+    return
 }
 
 Write-Host ''
@@ -548,20 +736,44 @@ Write-Info "Staging path: $($package.ModulePath)"
 Write-Step 'Publishing to PowerShell Gallery'
 $global:LASTEXITCODE = 0
 try {
-    Publish-Module -Path $package.ModulePath -Repository $Repository -NuGetApiKey $NuGetApiKey -Force -Verbose -ErrorAction Stop
+    $publishParams = @{
+        Path        = $package.ModulePath
+        Repository  = $Repository
+        NuGetApiKey = $NuGetApiKey
+        Force       = $true
+        ErrorAction = 'Stop'
+    }
+    if ($VerbosePreference -ne 'SilentlyContinue') {
+        $publishParams.Verbose = $true
+    }
+    Publish-Module @publishParams
 }
 catch {
     $msg = $_.Exception.Message
     if ($msg -match '403' -or $msg -match 'API key is invalid' -or $msg -match 'does not have permission') {
-        throw @(
-            "Publish failed with authentication/authorization error.",
-            "Check these items:",
-            "1) API key is active and not expired",
-            "2) API key has push scope for package '$ModuleName'",
-            "3) Package owner includes your account",
-            "4) Key has not been revoked after being exposed",
-            "Original error: $msg"
-        ) -join [Environment]::NewLine
+        Write-PublishFailure `
+            -Title 'Authentication/authorization error' `
+            -Detail "PowerShell Gallery rejected the API key for module '$ModuleName'." `
+            -FixCommands @(
+                'Use a valid PSGallery API key (active, not expired, push scope).',
+                "Ensure your account is an owner of '$ModuleName'.",
+                'If key exposure is possible, revoke and rotate the key.',
+                'Re-run publish with the new key.'
+            ) `
+            -RawError $msg
+        return
+    }
+    if ($msg -match 'Failed to generate the compressed file' -or $msg -match 'failed to pack' -or $msg -match 'NU1100') {
+        Write-PublishFailure `
+            -Title 'Packaging failed during dotnet restore/pack' `
+            -Detail 'Publish-Module could not build the temporary NuGet package (commonly missing/disabled nuget.org source).' `
+            -FixCommands @(
+                'dotnet nuget list source',
+                'dotnet nuget add source https://api.nuget.org/v3/index.json -n nuget.org',
+                'dotnet nuget enable source nuget.org'
+            ) `
+            -RawError $msg
+        return
     }
     throw
 }

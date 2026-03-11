@@ -5,10 +5,10 @@ Enable Unix-style CLI tooling on Windows by adding Git-for-Windows tool paths, o
 ## Install From PowerShell Gallery
 
 ```powershell
-Install-Module Enable-UnixTools
+Install-Module -Name Enable-UnixTools
+Import-Module Enable-UnixTools
+Enable-UnixTools -InstallFull
 ```
-
-`Install-Module` only downloads the module. It does not apply PATH/shim changes until you run the command.
 
 ## Basic Usage
 
@@ -88,6 +88,8 @@ Use the interactive publisher script:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\publish.ps1
 ```
+
+If publish prerequisites are missing, `publish.ps1` now auto-applies safe preflight fixes first (for example, adding/enabling dotnet `nuget.org` source). If a prerequisite still cannot be fixed automatically, it stops early and prints exact manual fix commands.
 
 `publish.ps1` supports and packages:
 
