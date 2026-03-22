@@ -397,17 +397,17 @@ function Assert-Admin {
             Write-Warning "Running in UserScope mode (admin not required)."
         }
         return $true
+        return $true
     }
     if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         if ($script:DryRun) {
             Write-Warning "Running in DryRun mode (admin checks relaxed)."
             return $true
         }
-        Write-Section "Prerequisites"
-        Write-Status -Type fail -Label "Administrator required" -Detail "Machine scope needs elevation"
-        Write-Dim "Run one of these commands:" -Indent
-        Write-Dim "Start-Process pwsh -Verb RunAs" -Indent
-        Write-Dim "Enable-UnixTools -InstallFull -UserScope" -Indent
+        Write-Footer -Type fail -Message "Administrator rights are required for Machine scope."
+        Write-Host "  Re-run PowerShell as Administrator, or use -UserScope." -ForegroundColor DarkGray
+        Write-Host "  Example: .\Enable-UnixTools.ps1 -InstallFull -UserScope" -ForegroundColor DarkGray
+        Write-Host ""
         return $false
     }
     return $true
@@ -3253,7 +3253,6 @@ try {
     Write-Header -Mode $installMode
 
     if (-not (Assert-Admin)) {
-        Write-Footer -Message "Stopped before making changes" -Type fail
         return
     }
 
