@@ -118,9 +118,12 @@ param(
     [switch]$NormalizePath,
     [switch]$InstallProfileShims,
     [switch]$InstallOptionalTools,
+    [switch]$InstallTerminalSetup,
     [switch]$InstallFull,
     [switch]$UserScope,
     [switch]$Uninstall,
+    [string]$Theme = "lightgreen",
+    [string]$ThemesDir,
     [string]$LogPath,
     [Alias('h')]
     [switch]$Help,
@@ -704,7 +707,9 @@ function Get-OptionalToolCatalog {
         [pscustomobject]@{ Command = "lazygit"; WingetId = "JesseDuffield.lazygit"; ChocoId = "lazygit" },
         [pscustomobject]@{ Command = "yazi"; WingetId = "sxyazi.yazi"; ChocoId = "yazi" },
         [pscustomobject]@{ Command = "dust"; WingetId = "bootandy.dust"; ChocoId = "du-dust" },
-        [pscustomobject]@{ Command = "procs"; WingetId = "dalance.procs"; ChocoId = "procs" }    )
+        [pscustomobject]@{ Command = "procs"; WingetId = "dalance.procs"; ChocoId = "procs" },
+        [pscustomobject]@{ Command = "oh-my-posh"; WingetId = "JanDeDobbeleer.OhMyPosh"; ChocoId = "oh-my-posh" }
+    )
 }
 
 function Get-OptionalPowerShellModuleCatalog {
@@ -817,6 +822,90 @@ function Install-MissingOptionalPowerShellModules([object[]]$Catalog) {
     }
 
     return $newlyInstalled
+}
+
+function Download-TerminalThemes {
+    param([Parameter(Mandatory = $true)][string]$ThemesDir)
+
+    if ($script:DryRun) {
+        Write-Host "[DRYRUN] Download and extract Oh My Posh themes to '$ThemesDir'" -ForegroundColor DarkGray
+        return
+    }
+
+    if (Test-Path $ThemesDir) {
+        Write-Status -Type info -Label "Themes directory" -Detail "already exists, skipping download" -Indent
+        return
+    }
+
+    $zip = Join-Path $env:TEMP "omp-themes-$([guid]::NewGuid().ToString().Split('-')[0]).zip"
+    try {
+        Write-Status -Type detail -Label "Downloading themes" -Detail "oh-my-posh/releases/latest" -Indent
+        Invoke-WebRequest -Uri "https://github.com/JanDeDobbeleer/oh-my-posh/releases/latest/download/themes.zip" -OutFile $zip -ErrorAction Stop
+        New-DirectoryIfMissing $ThemesDir
+        Write-Status -Type detail -Label "Extracting themes" -Detail $ThemesDir -Indent
+        Expand-Archive -Path $zip -DestinationPath $ThemesDir -Force -ErrorAction Stop
+    }
+    catch {
+        Write-Status -Type warn -Label "Themes failed" -Detail $_.Exception.Message -Indent
+    }
+    finally {
+        if (Test-Path $zip) { Remove-Item -Path $zip -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Install-NerdFont {
+    if ($script:DryRun) {
+        Write-Host "[DRYRUN] Download and install CaskaydiaCove Nerd Font" -ForegroundColor DarkGray
+        return
+    }
+
+    try {
+        # Check if already installed
+        [System.Reflection.Assembly]::LoadWithPartialName("System.Drawing") | Out-Null
+        $installed = [System.Drawing.FontFamily]::Families | Where-Object { $_.Name -match "CaskaydiaCove" }
+        if ($installed) {
+            Write-Status -Type ok -Label "Nerd Font" -Detail "CaskaydiaCove already installed" -Indent
+            return
+        }
+    }
+    catch {
+        # System.Drawing might not be available in all PS environments, continue with install attempt
+    }
+
+    $zip = Join-Path $env:TEMP "CascadiaCode-$([guid]::NewGuid().ToString().Split('-')[0]).zip"
+    $dir = Join-Path $env:TEMP "CascadiaCode-$([guid]::NewGuid().ToString().Split('-')[0])"
+    try {
+        Write-Status -Type detail -Label "Downloading font" -Detail "ryanoasis/nerd-fonts" -Indent
+        Invoke-WebRequest -Uri "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/CascadiaCode.zip" -OutFile $zip -ErrorAction Stop
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        Expand-Archive -Path $zip -DestinationPath $dir -Force -ErrorAction Stop
+        
+        Write-Status -Type detail -Label "Installing font" -Detail "copying to shell:fonts" -Indent
+        $shell = New-Object -ComObject Shell.Application
+        $fontFolder = $shell.Namespace(0x14) # Fonts folder
+        Get-ChildItem -Path $dir -Include "*.ttf","*.otf" -Recurse | ForEach-Object {
+            $fontFolder.CopyHere($_.FullName, 0x10) # 0x10 = No confirmation
+        }
+    }
+    catch {
+        Write-Status -Type warn -Label "Font install failed" -Detail $_.Exception.Message -Indent
+    }
+    finally {
+        if (Test-Path $zip) { Remove-Item -Path $zip -Force -ErrorAction SilentlyContinue }
+        if (Test-Path $dir) { Remove-Item -Path $dir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Install-TerminalSetup {
+    param(
+        [Parameter(Mandatory = $true)][string]$ThemesDir,
+        [string]$Theme = "pure"
+    )
+
+    Write-Section "Terminal Setup"
+    
+    Download-TerminalThemes -ThemesDir $ThemesDir
+    Install-NerdFont
 }
 
 function Get-CoreShimToolCatalog {
@@ -1471,7 +1560,8 @@ function Remove-InstalledProfileShims {
         @{ Start = "# >>> unix-tools-smart-shell >>>"; End = "# <<< unix-tools-smart-shell <<<" },
         @{ Start = "# >>> codex-smart-shell >>>"; End = "# <<< codex-smart-shell <<<" },
         @{ Start = "# >>> git-tools-missing-shims >>>"; End = "# <<< git-tools-missing-shims <<<" },
-        @{ Start = "# >>> git-tools-alias-compat >>>"; End = "# <<< git-tools-alias-compat <<<" }
+        @{ Start = "# >>> git-tools-alias-compat >>>"; End = "# <<< git-tools-alias-compat <<<" },
+        @{ Start = "# >>> unix-tools-terminal-setup >>>"; End = "# <<< unix-tools-terminal-setup <<<" }
     )
 
     foreach ($m in $markers) {
@@ -1480,6 +1570,10 @@ function Remove-InstalledProfileShims {
 }
 
 function Install-ProfileInlineShims {
+    param(
+        [string]$ThemesDir,
+        [string]$Theme = "pure"
+    )
     $profilePath = $PROFILE.CurrentUserCurrentHost
     $backup = Backup-ProfileFile -ProfilePath $profilePath
     if ($backup) { Write-Status -Type detail -Label "Profile backup" -Detail (Split-Path $backup -Leaf) }
@@ -1488,7 +1582,10 @@ function Install-ProfileInlineShims {
     Install-ProfileMissingShims
     Install-ProfileAliasCompat
     Install-ProfileSmartShell
-    Write-Status -Type ok -Label "Profile blocks" -Detail "inline (missing + alias-compat + smart-shell) -> $profilePath"
+    if ($ThemesDir) {
+        Install-ProfileOhMyPosh -ThemesDir $ThemesDir -Theme $Theme
+    }
+    Write-Status -Type ok -Label "Profile blocks" -Detail "inline (missing + alias-compat + smart-shell + terminal-setup) -> $profilePath"
     return "inline"
 }
 
@@ -3089,6 +3186,30 @@ Set-UnixCommand -Name "sleep" -Fallback {
     Write-Status -Type ok -Label "Profile blocks" -Detail "alias-compat updated -> $profilePath"
 }
 
+function Install-ProfileOhMyPosh {
+    param(
+        [Parameter(Mandatory = $true)][string]$ThemesDir,
+        [string]$Theme = "pure"
+    )
+    $profilePath = $PROFILE.CurrentUserCurrentHost
+    $backup = Backup-ProfileFile -ProfilePath $profilePath
+    if ($backup) { Write-Verbose "Profile backup: $backup" }
+    
+    $startMarker = "# >>> unix-tools-terminal-setup >>>"
+    $endMarker = "# <<< unix-tools-terminal-setup <<<"
+
+    $blockBody = @"
+# Oh My Posh theme configuration
+if (Get-Command oh-my-posh -ErrorAction SilentlyContinue) {
+    `$themesDir = "$ThemesDir"
+    oh-my-posh init pwsh --config "`$themesDir\$Theme.omp.json" | Invoke-Expression
+}
+"@
+
+    Upsert-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody
+    Write-Status -Type ok -Label "Profile blocks" -Detail "terminal-setup updated -> $profilePath"
+}
+
 function Install-ProfileSmartShell {
     $profilePath = $PROFILE.CurrentUserCurrentHost
     $backup = Backup-ProfileFile -ProfilePath $profilePath
@@ -3243,12 +3364,24 @@ if ($InstallFull) {
     $AddGitCmd = $true
     $NormalizePath = $true
     $InstallOptionalTools = $true
+    $InstallTerminalSetup = $true
     $CreateShims = $true
     $InstallProfileShims = $true
 }
 
 $transcriptStarted = Start-ScriptTranscript -Path $LogPath
 try {
+    # Calculate default ThemesDir if not provided
+    if (-not $ThemesDir) {
+        $base = if ($script:PathScope -eq "User") {
+            if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:USERPROFILE }
+        }
+        else {
+            $env:ProgramData
+        }
+        $ThemesDir = Join-Path $base "oh-my-posh-themes\themes"
+    }
+
     $installMode = if ($InstallFull) { "Full install" } elseif ($Uninstall) { "Uninstall" } else { "Custom" }
     Write-Header -Mode $installMode
 
@@ -3428,6 +3561,14 @@ try {
             Update-MachinePathEntries
             $didChange = $true
             Write-Status -Type ok -Label "PATH normalized" -Detail "removed duplicates/trailing slashes"
+        }
+    }
+
+    # ======================== Terminal Setup ========================
+    if ($InstallTerminalSetup) {
+        if ($PSCmdlet.ShouldProcess("Terminal Setup", "Install Oh My Posh themes and Nerd Fonts")) {
+            Install-TerminalSetup -ThemesDir $ThemesDir -Theme $Theme
+            $didChange = $true
         }
     }
 
@@ -3621,7 +3762,7 @@ try {
     if ($InstallProfileShims) {
         Write-Section "Profile"
         if ($PSCmdlet.ShouldProcess($PROFILE.CurrentUserCurrentHost, "Install/update unix-tools profile shim blocks")) {
-            Install-ProfileInlineShims
+            Install-ProfileInlineShims -ThemesDir $ThemesDir -Theme $Theme
             # Capture hash immediately after writing so we can detect tampering before reload.
             $profilePath = $PROFILE.CurrentUserCurrentHost
             $expectedHash = $null
