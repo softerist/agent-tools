@@ -6,8 +6,10 @@
 .DESCRIPTION
     Discovers Git-for-Windows and exposes its bundled Unix tools on Windows.
     Optionally creates priority .cmd shims, installs PowerShell profile
-    fallback functions for missing commands, and provides alias-compat
-    wrappers (rm, cp, mv, ls, cat, etc.) that accept common Unix flags.
+    fallback functions for missing commands, provides alias-compat
+    wrappers (rm, cp, mv, ls, cat, etc.) that accept common Unix flags,
+    and wires optional smart-shell integrations such as predictive
+    suggestions, fuzzy navigation, Git explorers, and file explorers.
 
     Default mode writes to Machine scope and requires elevation.
     Use -UserScope for per-user installs without elevation.
@@ -30,8 +32,10 @@
     managed directly by this script.
 
 .PARAMETER InstallOptionalTools
-    Install missing optional CLI tools (rg, fd, jq, yq, bat, eza, fzf, ag)
-    using winget/choco when available.
+    Install missing optional CLI tools (rg, fd, jq, yq, bat, eza, fzf, ag,
+    zoxide, lazygit, yazi, etc.) and optional PowerShell modules
+    (CompletionPredictor, PSFzf, ZLocation, posh-git, Terminal-Icons,
+    powershell-yaml, PSScriptAnalyzer, etc.) when available.
 
 .PARAMETER InstallFull
     Run the full setup in one command:
@@ -125,7 +129,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$ScriptVersion = "2.2.4"
+$ScriptVersion = "2.3.0"
 $script:PathScope = if ($UserScope) { "User" } else { "Machine" }
 $script:PathDisplay = "$($script:PathScope) PATH"
 $script:DryRun = $DryRun.IsPresent
@@ -371,7 +375,8 @@ function Backup-PathVariable {
     $current = [Environment]::GetEnvironmentVariable("Path", $Scope)
     if ([string]::IsNullOrWhiteSpace($current)) { return }
     $backupDir = if ($Scope -eq "User") {
-        Join-Path (if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:USERPROFILE }) "UnixToolsSystemWide"
+        $userBase = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:USERPROFILE }
+        Join-Path $userBase "UnixToolsSystemWide"
     }
     else {
         Join-Path $env:ProgramData "UnixToolsSystemWide"
@@ -697,8 +702,121 @@ function Get-OptionalToolCatalog {
         [pscustomobject]@{ Command = "delta"; WingetId = "dandavison.delta"; ChocoId = "delta" },
         [pscustomobject]@{ Command = "gh"; WingetId = "GitHub.cli"; ChocoId = "gh" },
         [pscustomobject]@{ Command = "lazygit"; WingetId = "JesseDuffield.lazygit"; ChocoId = "lazygit" },
+        [pscustomobject]@{ Command = "yazi"; WingetId = "sxyazi.yazi"; ChocoId = "yazi" },
         [pscustomobject]@{ Command = "dust"; WingetId = "bootandy.dust"; ChocoId = "du-dust" },
         [pscustomobject]@{ Command = "procs"; WingetId = "dalance.procs"; ChocoId = "procs" }    )
+}
+
+function Get-OptionalPowerShellModuleCatalog {
+    return @(
+        [pscustomobject]@{ ModuleName = "CompletionPredictor"; Repository = "PSGallery" },
+        [pscustomobject]@{ ModuleName = "Microsoft.WinGet.CommandNotFound"; Repository = "PSGallery" },
+        [pscustomobject]@{ ModuleName = "PSFzf"; Repository = "PSGallery" },
+        [pscustomobject]@{ ModuleName = "ZLocation"; Repository = "PSGallery" },
+        [pscustomobject]@{ ModuleName = "posh-git"; Repository = "PSGallery" },
+        [pscustomobject]@{ ModuleName = "Terminal-Icons"; Repository = "PSGallery" },
+        [pscustomobject]@{ ModuleName = "powershell-yaml"; Repository = "PSGallery" },
+        [pscustomobject]@{ ModuleName = "PSScriptAnalyzer"; Repository = "PSGallery" }
+    )
+}
+
+function Install-MissingOptionalPowerShellModules([object[]]$Catalog) {
+    if (-not $Catalog -or $Catalog.Count -eq 0) { return @() }
+
+    $psResource = Get-Command Install-PSResource -ErrorAction SilentlyContinue
+    $powerShellGet = Get-Command Install-Module -ErrorAction SilentlyContinue
+    if (-not $psResource -and -not $powerShellGet) {
+        Write-Status -Type warn -Label "No module installer" -Detail "PowerShell modules cannot be auto-installed"
+        return @()
+    }
+
+    $newlyInstalled = @()
+    foreach ($module in $Catalog) {
+        $moduleName = [string]$module.ModuleName
+        $repository = if ($module.Repository) { [string]$module.Repository } else { "PSGallery" }
+        if ([string]::IsNullOrWhiteSpace($moduleName)) { continue }
+
+        if (Get-Module -ListAvailable $moduleName) {
+            continue
+        }
+
+        $installed = $false
+        $managerUsed = $null
+
+        try {
+            if ($script:DryRun) {
+                if ($psResource) {
+                    Write-DryRun "Install-PSResource $moduleName -Repository $repository -Scope CurrentUser -TrustRepository -Quiet"
+                    $managerUsed = "psresourceget"
+                }
+                else {
+                    Write-DryRun "Install-Module $moduleName -Repository $repository -Scope CurrentUser -Force -AllowClobber"
+                    $managerUsed = "powershellget"
+                }
+                $installed = $true
+            }
+            elseif ($psResource) {
+                Install-PSResource -Name $moduleName -Repository $repository -Scope CurrentUser -TrustRepository -Quiet -ErrorAction Stop
+                $managerUsed = "psresourceget"
+                $installed = $true
+            }
+            else {
+                Install-Module -Name $moduleName -Repository $repository -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+                $managerUsed = "powershellget"
+                $installed = $true
+            }
+        }
+        catch {
+            Write-Status -Type warn -Label "Module install failed" -Detail "${moduleName}: $($_.Exception.Message)" -Indent
+        }
+
+        if (-not $script:DryRun -and $installed -and -not (Get-Module -ListAvailable $moduleName)) {
+            $installed = $false
+            Write-Status -Type warn -Label "Module missing" -Detail "$moduleName not detected after install" -Indent
+        }
+
+        if ($installed) {
+            $newlyInstalled += [pscustomobject]@{
+                Kind          = "PowerShellModule"
+                Command       = $null
+                ModuleName    = $moduleName
+                Manager       = $managerUsed
+                PackageId     = $moduleName
+                InstalledAt   = (Get-Date).ToString("o")
+                ScriptVersion = $ScriptVersion
+            }
+            Write-Status -Type ok -Label "Module installed" -Detail "$moduleName via $managerUsed" -Indent
+        }
+    }
+
+    if ($newlyInstalled.Count -gt 0) {
+        $existing = @(Read-OptionalToolState)
+        $records = New-Object System.Collections.Generic.List[object]
+        $moduleMap = @{}
+
+        foreach ($item in $existing) {
+            $kind = if ($item.PSObject.Properties["Kind"]) { [string]$item.Kind } else { "" }
+            $name = if ($item.PSObject.Properties["ModuleName"]) { [string]$item.ModuleName } else { "" }
+            if ($kind -eq "PowerShellModule" -and -not [string]::IsNullOrWhiteSpace($name)) {
+                $moduleMap[$name] = $item
+            }
+            else {
+                $records.Add($item) | Out-Null
+            }
+        }
+
+        foreach ($item in $newlyInstalled) {
+            $moduleMap[[string]$item.ModuleName] = $item
+        }
+
+        foreach ($item in ($moduleMap.Values | Sort-Object ModuleName)) {
+            $records.Add($item) | Out-Null
+        }
+
+        Write-OptionalToolState -Records @($records)
+    }
+
+    return $newlyInstalled
 }
 
 function Get-CoreShimToolCatalog {
@@ -1010,9 +1128,51 @@ function Uninstall-TrackedOptionalTools {
     $removedCount = 0
     $remaining = @()
     foreach ($item in $tracked) {
+        $kind = if ($item.PSObject.Properties["Kind"]) { [string]$item.Kind } else { "" }
         $commandName = [string]$item.Command
+        $moduleName = if ($item.PSObject.Properties["ModuleName"]) { [string]$item.ModuleName } else { "" }
         $manager = [string]$item.Manager
         $packageId = [string]$item.PackageId
+
+        if ($kind -eq "PowerShellModule" -or -not [string]::IsNullOrWhiteSpace($moduleName)) {
+            if ([string]::IsNullOrWhiteSpace($moduleName)) {
+                $remaining += $item
+                continue
+            }
+
+            $ok = $false
+            try {
+                if ($script:DryRun) {
+                    if ($manager -eq "psresourceget") {
+                        Write-Host "[DRYRUN] Uninstall-PSResource $moduleName" -ForegroundColor DarkGray
+                    }
+                    else {
+                        Write-Host "[DRYRUN] Uninstall-Module $moduleName -AllVersions -Force" -ForegroundColor DarkGray
+                    }
+                    $ok = $true
+                }
+                elseif ($manager -eq "psresourceget" -and (Get-Command Uninstall-PSResource -ErrorAction SilentlyContinue)) {
+                    Uninstall-PSResource -Name $moduleName -Scope CurrentUser -Quiet -ErrorAction Stop
+                    $ok = $true
+                }
+                elseif (Get-Command Uninstall-Module -ErrorAction SilentlyContinue) {
+                    Uninstall-Module -Name $moduleName -AllVersions -Force -ErrorAction Stop
+                    $ok = $true
+                }
+            }
+            catch {
+                Write-Status -Type warn -Label "Module uninstall failed" -Detail "${moduleName}: $($_.Exception.Message)"
+            }
+
+            if ($ok) {
+                $removedCount++
+                Write-Status -Type ok -Label "Module removed" -Detail $moduleName
+            }
+            else {
+                $remaining += $item
+            }
+            continue
+        }
 
         if ([string]::IsNullOrWhiteSpace($manager) -or [string]::IsNullOrWhiteSpace($packageId)) {
             $remaining += $item
@@ -1308,6 +1468,8 @@ function Remove-InstalledProfileShims {
         @{ Start = "# >>> unix-tools-fast-shims >>>"; End = "# <<< unix-tools-fast-shims <<<" },
         @{ Start = "# >>> unix-tools-missing-shims >>>"; End = "# <<< unix-tools-missing-shims <<<" },
         @{ Start = "# >>> unix-tools-alias-compat >>>"; End = "# <<< unix-tools-alias-compat <<<" },
+        @{ Start = "# >>> unix-tools-smart-shell >>>"; End = "# <<< unix-tools-smart-shell <<<" },
+        @{ Start = "# >>> codex-smart-shell >>>"; End = "# <<< codex-smart-shell <<<" },
         @{ Start = "# >>> git-tools-missing-shims >>>"; End = "# <<< git-tools-missing-shims <<<" },
         @{ Start = "# >>> git-tools-alias-compat >>>"; End = "# <<< git-tools-alias-compat <<<" }
     )
@@ -1325,7 +1487,8 @@ function Install-ProfileInlineShims {
     Remove-InstalledProfileShims
     Install-ProfileMissingShims
     Install-ProfileAliasCompat
-    Write-Status -Type ok -Label "Profile blocks" -Detail "inline (missing + alias-compat) -> $profilePath"
+    Install-ProfileSmartShell
+    Write-Status -Type ok -Label "Profile blocks" -Detail "inline (missing + alias-compat + smart-shell) -> $profilePath"
     return "inline"
 }
 
@@ -2926,6 +3089,140 @@ Set-UnixCommand -Name "sleep" -Fallback {
     Write-Status -Type ok -Label "Profile blocks" -Detail "alias-compat updated -> $profilePath"
 }
 
+function Install-ProfileSmartShell {
+    $profilePath = $PROFILE.CurrentUserCurrentHost
+    $backup = Backup-ProfileFile -ProfilePath $profilePath
+    if ($backup) { Write-Verbose "Profile backup: $backup" }
+    $startMarker = "# >>> unix-tools-smart-shell >>>"
+    $endMarker = "# <<< unix-tools-smart-shell <<<"
+
+    $blockBody = @'
+# Enable smart-shell integrations: prediction, fuzzy navigation, Git/file explorers.
+if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
+    $winGetLinks = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'
+    $winGetPackages = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
+    if ((Test-Path -LiteralPath $winGetLinks) -and -not (($env:PATH -split ';') -contains $winGetLinks)) {
+        $env:PATH = "$winGetLinks;$env:PATH"
+    }
+
+    function global:Resolve-SmartShellExecutable {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string[]]$Candidates
+        )
+
+        foreach ($candidate in $Candidates) {
+            $cmd = Get-Command $candidate -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($cmd) {
+                return $cmd.Source
+            }
+
+            foreach ($dir in @($winGetLinks, 'C:\Program Files\Git\shims')) {
+                if (-not [string]::IsNullOrWhiteSpace($dir)) {
+                    $path = Join-Path $dir $candidate
+                    if (Test-Path -LiteralPath $path -PathType Leaf) {
+                        return $path
+                    }
+                }
+            }
+
+            if (Test-Path -LiteralPath $winGetPackages) {
+                $pkgPath = Get-ChildItem -Path $winGetPackages -Recurse -Filter $candidate -File -ErrorAction SilentlyContinue |
+                    Select-Object -First 1 -ExpandProperty FullName
+                if ($pkgPath) {
+                    return $pkgPath
+                }
+            }
+        }
+    }
+
+    if (Get-Module -ListAvailable PSReadLine) {
+        Import-Module PSReadLine -ErrorAction SilentlyContinue
+        if (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
+            try {
+                Set-PSReadLineOption -PredictionSource HistoryAndPlugin
+                Set-PSReadLineOption -PredictionViewStyle InlineView
+            }
+            catch {
+                # Some hosts do not support predictive rendering.
+            }
+        }
+    }
+
+    foreach ($module in @(
+        'CompletionPredictor',
+        'Microsoft.WinGet.CommandNotFound',
+        'PSFzf',
+        'ZLocation',
+        'posh-git',
+        'Terminal-Icons',
+        'powershell-yaml',
+        'PSScriptAnalyzer'
+    )) {
+        if (Get-Module -ListAvailable $module) {
+            Import-Module $module -ErrorAction SilentlyContinue
+        }
+    }
+
+    if (Get-Command Set-PsFzfOption -ErrorAction SilentlyContinue) {
+        Set-PsFzfOption -EnableAliasFuzzyZLocation:$true -AltCCommand { Invoke-FuzzyZLocation }
+    }
+
+    $zoxideExe = Resolve-SmartShellExecutable -Candidates @('zoxide.exe', 'zoxide.cmd')
+    if ($zoxideExe) {
+        Invoke-Expression (& $zoxideExe init powershell --cmd j | Out-String)
+    }
+
+    function global:y {
+        $yaziExe = Resolve-SmartShellExecutable -Candidates @('yazi.exe', 'ya.exe', 'yazi.cmd', 'ya.cmd')
+        if (-not $yaziExe) {
+            throw "yazi is not available on PATH. Re-run setup with -InstallOptionalTools or restart PowerShell."
+        }
+
+        $tmp = (New-TemporaryFile).FullName
+        try {
+            & $yaziExe @args --cwd-file="$tmp"
+            if (Test-Path -LiteralPath $tmp) {
+                $cwd = Get-Content -Path $tmp -Encoding UTF8 -ErrorAction SilentlyContinue
+                if ($cwd -and $cwd -ne $PWD.Path -and (Test-Path -LiteralPath $cwd -PathType Container)) {
+                    Set-Location -LiteralPath (Resolve-Path -LiteralPath $cwd).Path
+                }
+            }
+        }
+        finally {
+            Remove-Item -Path $tmp -ErrorAction SilentlyContinue
+        }
+    }
+
+    function global:lg {
+        $lazygitExe = Resolve-SmartShellExecutable -Candidates @('lazygit.exe', 'lazygit.cmd')
+        if (-not $lazygitExe) {
+            throw "lazygit is not available on PATH. Re-run setup with -InstallOptionalTools."
+        }
+
+        $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("lazygit-cwd-{0}.txt" -f [guid]::NewGuid())
+        try {
+            $env:LAZYGIT_NEW_DIR_FILE = $tmp
+            & $lazygitExe @args
+            if (Test-Path -LiteralPath $tmp) {
+                $cwd = (Get-Content -Path $tmp -Encoding UTF8 -ErrorAction SilentlyContinue | Select-Object -First 1)
+                if ($cwd -and $cwd -ne $PWD.Path -and (Test-Path -LiteralPath $cwd -PathType Container)) {
+                    Set-Location -LiteralPath (Resolve-Path -LiteralPath $cwd).Path
+                }
+            }
+        }
+        finally {
+            Remove-Item env:LAZYGIT_NEW_DIR_FILE -ErrorAction SilentlyContinue
+            Remove-Item -Path $tmp -ErrorAction SilentlyContinue
+        }
+    }
+}
+'@
+
+    Upsert-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody
+    Write-Status -Type ok -Label "Profile blocks" -Detail "smart-shell updated -> $profilePath"
+}
+
 # ======================== Main Script ========================
 
 # ---- Help (works without elevation) ----
@@ -3078,7 +3375,7 @@ try {
             $removedOptional = Uninstall-TrackedOptionalTools
             if ($removedOptional -gt 0) {
                 $didChange = $true
-                Write-Status -Type ok -Label "Optional tools removed" -Detail "$removedOptional tool(s)"
+                Write-Status -Type ok -Label "Optional items removed" -Detail "$removedOptional item(s)"
             }
             else {
                 Write-Status -Type info -Label "Optional tools" -Detail "none tracked"
@@ -3138,14 +3435,19 @@ try {
     # ======================== Optional Tools ========================
 
     $optionalToolCatalog = Get-OptionalToolCatalog
+    $optionalModuleCatalog = Get-OptionalPowerShellModuleCatalog
     if ($InstallOptionalTools) {
         Write-Section "Optional Tools"
         if ($PSCmdlet.ShouldProcess("Optional tools", "Install missing optional tools via package managers")) {
             $presentBefore = @($optionalToolCatalog | Where-Object {
                     $_.Command -and (Get-Command ([string]$_.Command) -CommandType Application -ErrorAction SilentlyContinue)
                 } | ForEach-Object { [string]$_.Command })
+            $presentModulesBefore = @($optionalModuleCatalog | Where-Object {
+                    $_.ModuleName -and (Get-Module -ListAvailable ([string]$_.ModuleName))
+                } | ForEach-Object { [string]$_.ModuleName })
 
             $installedOptional = @(Install-MissingOptionalTools -Catalog $optionalToolCatalog)
+            $installedOptionalModules = @(Install-MissingOptionalPowerShellModules -Catalog $optionalModuleCatalog)
             Refresh-SessionPath
 
             $presentAfter = @($optionalToolCatalog | Where-Object {
@@ -3158,6 +3460,16 @@ try {
             $alreadyPresent = @($presentBefore | Sort-Object -Unique)
             $presentAfter = @($presentAfter | Sort-Object -Unique)
             $missingAfter = @($missingAfter | Sort-Object -Unique)
+            $presentModulesAfter = @($optionalModuleCatalog | Where-Object {
+                    $_.ModuleName -and (Get-Module -ListAvailable ([string]$_.ModuleName))
+                } | ForEach-Object { [string]$_.ModuleName })
+            $missingModulesAfter = @($optionalModuleCatalog | Where-Object {
+                    $_.ModuleName -and -not (Get-Module -ListAvailable ([string]$_.ModuleName))
+                } | ForEach-Object { [string]$_.ModuleName })
+            $newModulesDetected = @($presentModulesAfter | Where-Object { $_ -notin $presentModulesBefore })
+            $alreadyPresentModules = @($presentModulesBefore | Sort-Object -Unique)
+            $presentModulesAfter = @($presentModulesAfter | Sort-Object -Unique)
+            $missingModulesAfter = @($missingModulesAfter | Sort-Object -Unique)
 
             if ($alreadyPresent.Count -gt 0) {
                 Write-Status -Type ok -Label "$($alreadyPresent.Count) present before run" -Detail ($alreadyPresent -join ' ')
@@ -3172,11 +3484,31 @@ try {
                 Write-Status -Type ok -Label "$($installedOptional.Count) newly installed"
             }
 
+            if ($alreadyPresentModules.Count -gt 0) {
+                Write-Status -Type ok -Label "$($alreadyPresentModules.Count) modules present" -Detail ($alreadyPresentModules -join ', ')
+            }
+
+            if ($newModulesDetected.Count -gt 0) {
+                Write-Status -Type ok -Label "$($newModulesDetected.Count) modules present after install" -Detail ($newModulesDetected -join ', ')
+            }
+
+            if ($installedOptionalModules.Count -gt 0) {
+                $didChange = $true
+                Write-Status -Type ok -Label "$($installedOptionalModules.Count) modules newly installed"
+            }
+
             if ($missingAfter.Count -gt 0) {
                 Write-Status -Type warn -Label "$($missingAfter.Count) still missing" -Detail ($missingAfter -join ', ')
             }
             else {
                 Write-Status -Type ok -Label "All optional tools available after run" -Detail ($presentAfter -join ' ')
+            }
+
+            if ($missingModulesAfter.Count -gt 0) {
+                Write-Status -Type warn -Label "$($missingModulesAfter.Count) modules still missing" -Detail ($missingModulesAfter -join ', ')
+            }
+            else {
+                Write-Status -Type ok -Label "All optional modules available after run" -Detail ($presentModulesAfter -join ', ')
             }
         }
         else {
@@ -3318,7 +3650,7 @@ try {
             catch {
                 Write-Status -Type warn -Label "Profile reload failed" -Detail $_.Exception.Message
             }
-            Write-Status -Type ok -Label "Profile shims written" -Detail "missing-command + alias-compat"
+            Write-Status -Type ok -Label "Profile shims written" -Detail "missing-command + alias-compat + smart-shell"
             $didChange = $true
         }
         else {
@@ -3390,12 +3722,13 @@ try {
             $profileText = Get-Content -Path $profilePath -Raw -ErrorAction SilentlyContinue
             $hasMissingBlock = $profileText -and $profileText.Contains("# >>> unix-tools-missing-shims >>>") -and $profileText.Contains("# <<< unix-tools-missing-shims <<<")
             $hasAliasBlock = $profileText -and $profileText.Contains("# >>> unix-tools-alias-compat >>>") -and $profileText.Contains("# <<< unix-tools-alias-compat <<<")
+            $hasSmartShellBlock = $profileText -and $profileText.Contains("# >>> unix-tools-smart-shell >>>") -and $profileText.Contains("# <<< unix-tools-smart-shell <<<")
             $hasFastBlock = $profileText -and $profileText.Contains("# >>> unix-tools-fast-shims >>>") -and $profileText.Contains("# <<< unix-tools-fast-shims <<<")
 
-            if ($hasMissingBlock -and $hasAliasBlock) {
+            if ($hasMissingBlock -and $hasAliasBlock -and $hasSmartShellBlock) {
                 Write-Status -Type ok -Label "Profile blocks" -Detail "present in `$PROFILE"
             }
-            elseif ($hasMissingBlock -or $hasAliasBlock) {
+            elseif ($hasMissingBlock -or $hasAliasBlock -or $hasSmartShellBlock) {
                 Write-Status -Type warn -Label "Profile blocks" -Detail "partial install detected"
             }
             elseif ($hasFastBlock) {
