@@ -940,10 +940,51 @@ __LEGACY_INIT__
     return $blockBody
 }
 
+function Resolve-ProfilePromptTheme {
+    param(
+        [Parameter(Mandatory = $true)][string]$ThemesDir,
+        [string]$Theme = 'lightgreen'
+    )
+
+    $effectiveTheme = if ([string]::IsNullOrWhiteSpace($Theme)) {
+        'lightgreen'
+    }
+    else {
+        [System.IO.Path]::GetFileNameWithoutExtension($Theme.Trim())
+    }
+
+    if ([string]::IsNullOrWhiteSpace($effectiveTheme)) {
+        $effectiveTheme = 'lightgreen'
+    }
+
+    $configPath = Join-Path $ThemesDir ("{0}.omp.json" -f $effectiveTheme)
+    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        return [pscustomobject]@{
+            Theme = $effectiveTheme
+            ConfigPath = $configPath
+        }
+    }
+
+    foreach ($fallbackTheme in @('lightgreen', 'pure', 'jandedobbeleer')) {
+        $fallbackPath = Join-Path $ThemesDir ("{0}.omp.json" -f $fallbackTheme)
+        if (Test-Path -LiteralPath $fallbackPath -PathType Leaf) {
+            return [pscustomobject]@{
+                Theme = $fallbackTheme
+                ConfigPath = $fallbackPath
+            }
+        }
+    }
+
+    return [pscustomobject]@{
+        Theme = $effectiveTheme
+        ConfigPath = $configPath
+    }
+}
+
 function Get-ProfilePromptBlockBody {
     param(
         [Parameter(Mandatory = $true)][string]$ThemesDir,
-        [string]$Theme = 'pure',
+        [string]$Theme = 'lightgreen',
         [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Lazy'
     )
 
@@ -951,13 +992,17 @@ function Get-ProfilePromptBlockBody {
         return $null
     }
 
-    $configPath = Join-Path $ThemesDir ("{0}.omp.json" -f $Theme)
+    $themeInfo = Resolve-ProfilePromptTheme -ThemesDir $ThemesDir -Theme $Theme
+    $configPath = $themeInfo.ConfigPath
     if ($PromptInitMode -eq 'Eager') {
         $blockBody = @'
 # Oh My Posh theme configuration
 # Prompt init mode: Eager
 if (Get-Command oh-my-posh -ErrorAction SilentlyContinue) {
     $configPath = "__CONFIG_PATH__"
+    if (Get-Command Enable-UnixInteractiveFeatures -ErrorAction SilentlyContinue) {
+        Enable-UnixInteractiveFeatures
+    }
     oh-my-posh init pwsh --config "$configPath" | Invoke-Expression
 }
 '@
@@ -981,6 +1026,9 @@ if (Get-Command oh-my-posh -ErrorAction SilentlyContinue) {
         if ($script:UnixToolsPromptState -eq 'Failed') { return $false }
 
         try {
+            if (Get-Command Enable-UnixInteractiveFeatures -ErrorAction SilentlyContinue) {
+                Enable-UnixInteractiveFeatures
+            }
             oh-my-posh init pwsh --config "$configPath" | Invoke-Expression
             $script:UnixToolsPromptState = 'Loaded'
             return $true
@@ -2196,7 +2244,7 @@ function Remove-InstalledProfileShims {
 function Install-ProfileInlineShims {
     param(
         [string]$ThemesDir,
-        [string]$Theme = "pure",
+        [string]$Theme = "lightgreen",
         [ValidateSet('Fast', 'Legacy')][string]$StartupMode = 'Fast',
         [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptMode = 'Lazy'
     )
@@ -3813,7 +3861,7 @@ Set-UnixCommand -Name "sleep" -Fallback {
 function Install-ProfileOhMyPosh {
     param(
         [Parameter(Mandatory = $true)][string]$ThemesDir,
-        [string]$Theme = "pure",
+        [string]$Theme = "lightgreen",
         [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Lazy'
     )
     $profilePath = $PROFILE.CurrentUserCurrentHost

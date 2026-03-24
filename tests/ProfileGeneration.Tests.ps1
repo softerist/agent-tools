@@ -6,6 +6,7 @@ Import-ScriptFunctions -ScriptPath $scriptPath -Names @(
     'Get-OptionalPowerShellModuleCatalog',
     'Get-SmartShellOptionalModuleNames',
     'Get-ProfileSmartShellBlockBody',
+    'Resolve-ProfilePromptTheme',
     'Get-ProfilePromptBlockBody'
 )
 
@@ -32,6 +33,7 @@ Describe 'Generated profile blocks' {
         ($block -match '# Prompt init mode: Lazy') | Should Be $true
         ($block -match "UnixToolsPromptState = 'Pending'") | Should Be $true
         ($block -match 'function global:prompt') | Should Be $true
+        ($block -match 'Enable-UnixInteractiveFeatures') | Should Be $true
     }
 
     It 'builds an eager prompt block without warmup state' {
@@ -44,5 +46,12 @@ Describe 'Generated profile blocks' {
     It 'returns no prompt block when prompt mode is off' {
         $block = Get-ProfilePromptBlockBody -ThemesDir 'C:\Themes' -Theme 'lightgreen' -PromptInitMode Off
         $block | Should Be $null
+    }
+
+    It 'falls back to the default prompt theme when the requested theme is blank' {
+        $themeInfo = Resolve-ProfilePromptTheme -ThemesDir 'C:\Themes' -Theme ''
+
+        $themeInfo.Theme | Should Be 'lightgreen'
+        $themeInfo.ConfigPath | Should Be 'C:\Themes\lightgreen.omp.json'
     }
 }
