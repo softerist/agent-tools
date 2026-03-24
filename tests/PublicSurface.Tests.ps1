@@ -37,7 +37,7 @@ Describe 'Public surface and docs' {
         ($readmeText -match 'RepairWinget') | Should Be $false
         ($readmeText -match 'UninstallOptionalTools') | Should Be $true
         ($readmeText -match 'ProfileStartupMode Fast') | Should Be $true
-        ($readmeText -match 'PromptInitMode Lazy') | Should Be $true
+        ($readmeText -match 'PromptInitMode Eager') | Should Be $true
     }
 
     It 'guards optional-tool uninstall behind the explicit uninstall switch' {

@@ -73,8 +73,8 @@
 
 .PARAMETER PromptInitMode
     Prompt initialization mode for generated Oh My Posh profile block:
-    Lazy = minimal prompt first, then initialize Oh My Posh on a later prompt.
     Eager = initialize Oh My Posh during profile load.
+    Lazy = minimal prompt first, then initialize Oh My Posh on a later prompt.
     Off = do not install the prompt block.
 
 .PARAMETER LogPath
@@ -136,7 +136,7 @@
 #   .\Enable-UnixToolsSystemWide.ps1 -CreateShims -InstallOptionalTools
 #   .\Enable-UnixToolsSystemWide.ps1 -InstallFull
 #   .\Enable-UnixToolsSystemWide.ps1 -InstallFull -UserScope
-#   .\Enable-UnixToolsSystemWide.ps1 -InstallProfileShims -ProfileStartupMode Fast -PromptInitMode Lazy
+#   .\Enable-UnixToolsSystemWide.ps1 -InstallProfileShims -ProfileStartupMode Fast -PromptInitMode Eager
 #   .\Enable-UnixToolsSystemWide.ps1 -InstallProfileShims -LogPath C:\Temp\unix-tools-install.log
 #   .\Enable-UnixToolsSystemWide.ps1 -Uninstall
 #   .\Enable-UnixToolsSystemWide.ps1 -Uninstall -UninstallOptionalTools
@@ -158,7 +158,7 @@ param(
     [string]$Theme = "lightgreen",
     [string]$ThemesDir,
     [ValidateSet('Fast', 'Legacy')][string]$ProfileStartupMode = 'Fast',
-    [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Lazy',
+    [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Eager',
     [string]$LogPath,
     [Alias('h')]
     [switch]$Help,
@@ -841,11 +841,15 @@ if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
             return
         }
 
+        $isAgentShell = $env:CODEX_THREAD_ID -or $env:CODEX_INTERNAL_ORIGINATOR_OVERRIDE -or $env:ANTIGRAVITY_CLI_ALIAS
         foreach ($module in @(
 __MODULE_LINES__
         )) {
+            if ($isAgentShell -and $module -eq 'Terminal-Icons') {
+                continue
+            }
             if (Get-Module -ListAvailable $module) {
-                Import-Module $module -ErrorAction SilentlyContinue
+                Import-Module $module -ErrorAction SilentlyContinue -WarningAction SilentlyContinue 2>$null 3>$null | Out-Null
             }
         }
 
@@ -985,7 +989,7 @@ function Get-ProfilePromptBlockBody {
     param(
         [Parameter(Mandatory = $true)][string]$ThemesDir,
         [string]$Theme = 'lightgreen',
-        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Lazy'
+        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Eager'
     )
 
     if ($PromptInitMode -eq 'Off') {
@@ -994,11 +998,11 @@ function Get-ProfilePromptBlockBody {
 
     $themeInfo = Resolve-ProfilePromptTheme -ThemesDir $ThemesDir -Theme $Theme
     $configPath = $themeInfo.ConfigPath
-    if ($PromptInitMode -eq 'Eager') {
+if ($PromptInitMode -eq 'Eager') {
         $blockBody = @'
 # Oh My Posh theme configuration
 # Prompt init mode: Eager
-if (Get-Command oh-my-posh -ErrorAction SilentlyContinue) {
+if (-not $env:CODEX_THREAD_ID -and -not $env:CODEX_INTERNAL_ORIGINATOR_OVERRIDE -and -not $env:ANTIGRAVITY_CLI_ALIAS -and (Get-Command oh-my-posh -ErrorAction SilentlyContinue)) {
     $configPath = "__CONFIG_PATH__"
     if (Get-Command Enable-UnixInteractiveFeatures -ErrorAction SilentlyContinue) {
         Enable-UnixInteractiveFeatures
@@ -1012,7 +1016,7 @@ if (Get-Command oh-my-posh -ErrorAction SilentlyContinue) {
     $blockBody = @'
 # Oh My Posh theme configuration
 # Prompt init mode: Lazy
-if (Get-Command oh-my-posh -ErrorAction SilentlyContinue) {
+if (-not $env:CODEX_THREAD_ID -and -not $env:CODEX_INTERNAL_ORIGINATOR_OVERRIDE -and -not $env:ANTIGRAVITY_CLI_ALIAS -and (Get-Command oh-my-posh -ErrorAction SilentlyContinue)) {
     $configPath = "__CONFIG_PATH__"
     $script:UnixToolsPromptState = 'Pending'
     $script:UnixToolsPromptWarningShown = $false
@@ -1384,6 +1388,7 @@ function Save-TerminalThemes {
 
     if (Test-Path $ThemesDir) {
         Write-Status -Type info -Label "Themes directory" -Detail "already exists, skipping download" -Indent
+        Update-ManagedOhMyPoshThemes -ThemesDir $ThemesDir
         return
     }
 
@@ -1394,6 +1399,7 @@ function Save-TerminalThemes {
         New-DirectoryIfMissing $ThemesDir
         Write-Status -Type detail -Label "Extracting themes" -Detail $ThemesDir -Indent
         Expand-Archive -Path $zip -DestinationPath $ThemesDir -Force -ErrorAction Stop
+        Update-ManagedOhMyPoshThemes -ThemesDir $ThemesDir
     }
     catch {
         Write-Status -Type warn -Label "Themes failed" -Detail $_.Exception.Message -Indent
@@ -1401,6 +1407,44 @@ function Save-TerminalThemes {
     finally {
         if (Test-Path $zip) { Remove-Item -Path $zip -Force -ErrorAction SilentlyContinue }
     }
+}
+
+function Update-ManagedOhMyPoshThemes {
+    param([Parameter(Mandatory = $true)][string]$ThemesDir)
+
+    $lightgreenThemePath = Join-Path $ThemesDir 'lightgreen.omp.json'
+    if (-not (Test-Path -LiteralPath $lightgreenThemePath -PathType Leaf)) {
+        Write-Verbose "Managed theme patch skipped: $lightgreenThemePath not found"
+        return
+    }
+
+    $themeJson = Get-Content -Raw -Path $lightgreenThemePath | ConvertFrom-Json
+    $promptBlock = $themeJson.blocks | Where-Object { $_.type -eq 'prompt' } | Select-Object -First 1
+    $rpromptBlock = $themeJson.blocks | Where-Object { $_.type -eq 'rprompt' } | Select-Object -First 1
+
+    if ($promptBlock) {
+        $pathSegment = $promptBlock.segments | Where-Object { $_.type -eq 'path' } | Select-Object -First 1
+        if ($pathSegment) {
+            $folderIcon = '<#A7F3D0>{0} </>' -f ([char]0xF07B)
+            $folderSeparatorIcon = ' <#7DD3FC>{0}</> ' -f ([char]0xE0B1)
+            $homeIcon = [string]([char]0xF015)
+            $pathSegment.foreground = '#F4F1DE'
+            $pathSegment.options = [pscustomobject]@{
+                style = 'agnoster_short'
+                max_depth = 4
+                folder_icon = $folderIcon
+                folder_separator_icon = $folderSeparatorIcon
+                home_icon = $homeIcon
+            }
+            $pathSegment.template = ' {{ .Path }} '
+        }
+    }
+
+    if ($rpromptBlock) {
+        $rpromptBlock.segments = @($rpromptBlock.segments | Where-Object { $_.type -notin @('executiontime', 'sysinfo', 'time') })
+    }
+
+    $themeJson | ConvertTo-Json -Depth 100 | Set-Content -Path $lightgreenThemePath -Encoding UTF8
 }
 
 function Install-NerdFont {
@@ -2289,7 +2333,18 @@ function Get-UnixShimExecutable {
         return $cached
     }
 
-    $app = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    $candidates = @(Get-Command $Name -CommandType Application -All -ErrorAction SilentlyContinue)
+    $app = $candidates |
+        Where-Object { $_.Source -match '\.exe$' -and $_.Source -notmatch '\\Git\\shims\\' } |
+        Select-Object -First 1
+    if (-not $app) {
+        $app = $candidates |
+            Where-Object { $_.Source -match '\.exe$' } |
+            Select-Object -First 1
+    }
+    if (-not $app) {
+        $app = $candidates | Select-Object -First 1
+    }
     if ($app) {
         $script:__UnixExeCache[$key] = $app
         return $app
@@ -3163,7 +3218,18 @@ if (-not (Get-Command Get-UnixShimExecutable -CommandType Function -ErrorAction 
             if ($cached -eq $script:__UnixExeMissing) { return $null }
             return $cached
         }
-        $app = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        $candidates = @(Get-Command $Name -CommandType Application -All -ErrorAction SilentlyContinue)
+        $app = $candidates |
+            Where-Object { $_.Source -match '\.exe$' -and $_.Source -notmatch '\\Git\\shims\\' } |
+            Select-Object -First 1
+        if (-not $app) {
+            $app = $candidates |
+                Where-Object { $_.Source -match '\.exe$' } |
+                Select-Object -First 1
+        }
+        if (-not $app) {
+            $app = $candidates | Select-Object -First 1
+        }
         if ($app) {
             $script:__UnixExeCache[$key] = $app
             return $app
@@ -3862,7 +3928,7 @@ function Install-ProfileOhMyPosh {
     param(
         [Parameter(Mandatory = $true)][string]$ThemesDir,
         [string]$Theme = "lightgreen",
-        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Lazy'
+        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Eager'
     )
     $profilePath = $PROFILE.CurrentUserCurrentHost
     $backup = Backup-ProfileFile -ProfilePath $profilePath
