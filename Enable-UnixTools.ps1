@@ -1222,6 +1222,9 @@ function Remove-LegacyInlineProfileShims {
         $tmp = "$ProfilePath.tmp"
         try {
             Set-Content -Path $tmp -Value $updated -Encoding UTF8
+            if (Test-Path $ProfilePath) {
+                Remove-Item -Path $ProfilePath -Force -ErrorAction SilentlyContinue
+            }
             Move-Item -Path $tmp -Destination $ProfilePath -Force
         }
         catch {
@@ -2157,15 +2160,7 @@ function Set-ProfileBlock {
         Write-Host "[DRYRUN] Set-Content '$ProfilePath' (updated profile block)" -ForegroundColor DarkGray
     }
     else {
-        $tmp = "$ProfilePath.tmp"
-        try {
-            Set-Content -Path $tmp -Value $updated -Encoding UTF8
-            Move-Item -Path $tmp -Destination $ProfilePath -Force
-        }
-        catch {
-            Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
-            throw
-        }
+        Set-Content -Path $ProfilePath -Value $updated -Encoding UTF8
     }
 }
 
@@ -2240,15 +2235,7 @@ function Remove-ManagedProfileBlocks {
         Write-Host "[DRYRUN] Set-Content '$ProfilePath' (removed managed blocks)" -ForegroundColor DarkGray
     }
     else {
-        $tmp = "$ProfilePath.tmp"
-        try {
-            Set-Content -Path $tmp -Value $updated -Encoding UTF8
-            Move-Item -Path $tmp -Destination $ProfilePath -Force
-        }
-        catch {
-            Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
-            throw
-        }
+        Set-Content -Path $ProfilePath -Value $updated -Encoding UTF8
     }
 }
 

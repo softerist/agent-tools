@@ -6,7 +6,8 @@ Import-ScriptFunctions -ScriptPath $scriptPath -Names @(
     'Find-LegacyInlineShimBlock',
     'Remove-LegacyInlineProfileShims',
     'Get-ProfileMetadataValue',
-    'Get-ProfileInstallationState'
+    'Get-ProfileInstallationState',
+    'Set-ProfileBlock'
 )
 
 $script:DryRun = $false
@@ -95,6 +96,24 @@ if (-not $script:__UnixShimsInitialized) {
             $state.StartupMode | Should Be 'Fast'
             $state.PromptInitMode | Should Be 'Lazy'
             $state.HasLegacyInlineBlock | Should Be $false
+        }
+        finally {
+            Remove-Item -Path $profilePath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'updates an existing profile block file without move-item collisions' {
+        $profilePath = New-TestTempPath -Extension '.ps1'
+        try {
+            Set-Content -Path $profilePath -Value "# existing`r`n" -Encoding UTF8
+
+            Set-ProfileBlock -ProfilePath $profilePath -StartMarker '# >>> test-block >>>' -EndMarker '# <<< test-block <<<' -BlockBody "line one`r`nline two"
+            Set-ProfileBlock -ProfilePath $profilePath -StartMarker '# >>> test-block >>>' -EndMarker '# <<< test-block <<<' -BlockBody "line three"
+
+            $updated = Get-Content -Path $profilePath -Raw
+            ($updated -match '# >>> test-block >>>') | Should Be $true
+            ($updated -match 'line three') | Should Be $true
+            ($updated -match 'line one') | Should Be $false
         }
         finally {
             Remove-Item -Path $profilePath -Force -ErrorAction SilentlyContinue
