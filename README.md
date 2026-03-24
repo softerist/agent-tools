@@ -7,28 +7,33 @@ Enable Unix-style CLI tooling on Windows by adding Git-for-Windows tool paths, o
 ```powershell
 Install-Module -Name Enable-UnixTools
 Import-Module Enable-UnixTools
-Enable-UnixTools -InstallFull
+Enable-UnixTools -InstallFull -ProfileStartupMode Fast -PromptInitMode Lazy
 ```
 
 ## Basic Usage
 
 ```powershell
 Import-Module Enable-UnixTools -Force
-Enable-UnixTools -InstallFull
+Enable-UnixTools -InstallFull -ProfileStartupMode Fast -PromptInitMode Lazy
 ```
 
 Examples:
 
 ```powershell
 Enable-UnixTools -InstallFull -UserScope
-Enable-UnixTools -CreateShims -InstallProfileShims -InstallOptionalTools -RepairWinget
+Enable-UnixTools -CreateShims -InstallProfileShims -InstallOptionalTools -InstallTerminalSetup -ProfileStartupMode Fast -PromptInitMode Lazy
 Enable-UnixTools -Uninstall
 Enable-UnixTools -Uninstall -UninstallOptionalTools
 ```
 
+Defaults:
+
+- `-ProfileStartupMode Fast` keeps startup imports minimal and exposes `Enable-UnixInteractiveFeatures` for on-demand shell extras.
+- `-PromptInitMode Lazy` installs a minimal prompt first, then applies Oh My Posh on a later prompt.
+
 ## Uninstall Semantics
 
-- Remove Unix tools configuration (PATH/shims/profile):
+- Remove Unix tools configuration (PATH/shims/profile) and keep tracked optional tools:
 
 ```powershell
 Enable-UnixTools -Uninstall
@@ -70,7 +75,13 @@ If needed:
 
 ```powershell
 $PSDefaultParameterValues.Remove('*:TrustedShimRoot')
-Enable-UnixTools -UserScope -CreateShims -InstallProfileShims -InstallOptionalTools -AddMingw -AddGitCmd -NormalizePath
+Enable-UnixTools -UserScope -CreateShims -InstallProfileShims -InstallOptionalTools -InstallTerminalSetup -AddMingw -AddGitCmd -NormalizePath -ProfileStartupMode Fast -PromptInitMode Lazy
+```
+
+If an older profile install left unmarked inline shims behind, re-run:
+
+```powershell
+Enable-UnixTools -InstallProfileShims -ProfileStartupMode Fast -PromptInitMode Lazy
 ```
 
 After install/uninstall, open a new terminal and verify:

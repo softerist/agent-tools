@@ -35,7 +35,10 @@
     Install missing optional CLI tools (rg, fd, jq, yq, bat, eza, fzf, ag,
     zoxide, lazygit, yazi, etc.) and optional PowerShell modules
     (CompletionPredictor, PSFzf, ZLocation, posh-git, Terminal-Icons,
-    powershell-yaml, PSScriptAnalyzer, etc.) when available.
+    powershell-yaml, etc.) when available.
+
+.PARAMETER InstallTerminalSetup
+    Install Oh My Posh themes and Nerd Font support for Windows Terminal/VS Code.
 
 .PARAMETER InstallFull
     Run the full setup in one command:
@@ -49,8 +52,30 @@
     - Shim directory is stored under LocalAppData
 
 .PARAMETER Uninstall
-    Remove shim directory, PATH entries, profile blocks, and optional tools
-    installed by this script.
+    Remove shim directory, PATH entries, and profile blocks installed by this script.
+
+.PARAMETER UninstallOptionalTools
+    When used together with -Uninstall, also remove optional tools tracked by this script.
+
+.PARAMETER UninstallFont
+    Remove the Nerd Font installed by this script.
+
+.PARAMETER Theme
+    Oh My Posh theme name to use for generated prompt configuration.
+
+.PARAMETER ThemesDir
+    Directory that contains Oh My Posh theme files.
+
+.PARAMETER ProfileStartupMode
+    Startup mode for generated profile integrations:
+    Fast = minimal startup imports with on-demand interactive features.
+    Legacy = eager interactive imports for compatibility.
+
+.PARAMETER PromptInitMode
+    Prompt initialization mode for generated Oh My Posh profile block:
+    Lazy = minimal prompt first, then initialize Oh My Posh on a later prompt.
+    Eager = initialize Oh My Posh during profile load.
+    Off = do not install the prompt block.
 
 .PARAMETER LogPath
     Path to a transcript log file for this run.
@@ -87,6 +112,10 @@
     Removes all shims, PATH entries, and profile blocks.
 
 .EXAMPLE
+    .\Enable-UnixToolsSystemWide.ps1 -Uninstall -UninstallOptionalTools
+    Removes all shims, PATH entries, profile blocks, and tracked optional tools.
+
+.EXAMPLE
     .\Enable-UnixToolsSystemWide.ps1 -Help
     Shows usage without requiring Administrator elevation.
 #>
@@ -107,8 +136,10 @@
 #   .\Enable-UnixToolsSystemWide.ps1 -CreateShims -InstallOptionalTools
 #   .\Enable-UnixToolsSystemWide.ps1 -InstallFull
 #   .\Enable-UnixToolsSystemWide.ps1 -InstallFull -UserScope
+#   .\Enable-UnixToolsSystemWide.ps1 -InstallProfileShims -ProfileStartupMode Fast -PromptInitMode Lazy
 #   .\Enable-UnixToolsSystemWide.ps1 -InstallProfileShims -LogPath C:\Temp\unix-tools-install.log
 #   .\Enable-UnixToolsSystemWide.ps1 -Uninstall
+#   .\Enable-UnixToolsSystemWide.ps1 -Uninstall -UninstallOptionalTools
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium', DefaultParameterSetName = 'Default')]
 param(
@@ -122,9 +153,12 @@ param(
     [switch]$InstallFull,
     [switch]$UserScope,
     [switch]$Uninstall,
+    [switch]$UninstallOptionalTools,
     [switch]$UninstallFont,
     [string]$Theme = "lightgreen",
     [string]$ThemesDir,
+    [ValidateSet('Fast', 'Legacy')][string]$ProfileStartupMode = 'Fast',
+    [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Lazy',
     [string]$LogPath,
     [Alias('h')]
     [switch]$Help,
@@ -133,14 +167,19 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$ScriptVersion = "2.3.0"
+$ScriptVersion = "2.4.0"
 $script:PathScope = if ($UserScope) { "User" } else { "Machine" }
 $script:PathDisplay = "$($script:PathScope) PATH"
 $script:DryRun = $DryRun.IsPresent
 
 # Enforce TLS 1.2+ only for all web requests (drops insecure TLS 1.0/1.1).
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls13 } catch {}
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls13
+}
+catch {
+    Write-Verbose "TLS 1.3 is unavailable in this host: $($_.Exception.Message)"
+}
 
 # Default to non-interactive behavior unless caller explicitly asks for confirmation.
 if (-not $PSBoundParameters.ContainsKey('Confirm')) {
@@ -159,7 +198,9 @@ try {
         $script:UseUnicode = $false
     }
 }
-catch { }
+catch {
+    Write-Verbose "Font-family detection unavailable in this host: $($_.Exception.Message)"
+}
 
 # Icon/box-drawing character sets.
 if ($script:UseUnicode) {
@@ -717,9 +758,473 @@ function Get-OptionalPowerShellModuleCatalog {
         [pscustomobject]@{ ModuleName = "ZLocation"; Repository = "PSGallery" },
         [pscustomobject]@{ ModuleName = "posh-git"; Repository = "PSGallery" },
         [pscustomobject]@{ ModuleName = "Terminal-Icons"; Repository = "PSGallery" },
-        [pscustomobject]@{ ModuleName = "powershell-yaml"; Repository = "PSGallery" },
-        [pscustomobject]@{ ModuleName = "PSScriptAnalyzer"; Repository = "PSGallery" }
+        [pscustomobject]@{ ModuleName = "powershell-yaml"; Repository = "PSGallery" }
     )
+}
+
+function Get-SmartShellOptionalModuleNames {
+    return @(Get-OptionalPowerShellModuleCatalog | Select-Object -ExpandProperty ModuleName)
+}
+
+function Get-ProfileSmartShellBlockBody {
+    param(
+        [ValidateSet('Fast', 'Legacy')][string]$StartupMode = 'Fast'
+    )
+
+    $moduleLines = (Get-SmartShellOptionalModuleNames | ForEach-Object { "            '{0}'" -f $_ }) -join "`r`n"
+    $legacyInit = ""
+    if ($StartupMode -eq 'Legacy') {
+        $legacyInit = @'
+    Enable-UnixInteractiveFeatures
+
+'@
+    }
+
+    $blockBody = @'
+# Enable smart-shell integrations: prediction, fuzzy navigation, Git/file explorers.
+# Startup mode: __STARTUP_MODE__
+if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
+    $script:SmartShellExeCache = @{}
+    $script:UnixInteractiveFeaturesEnabled = $false
+    $winGetLinks = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'
+    $winGetPackages = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
+    if ((Test-Path -LiteralPath $winGetLinks) -and -not (($env:PATH -split ';') -contains $winGetLinks)) {
+        $env:PATH = "$winGetLinks;$env:PATH"
+    }
+
+    function global:Resolve-SmartShellExecutable {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string[]]$Candidates,
+            [switch]$AllowPackageScan
+        )
+
+        foreach ($candidate in $Candidates) {
+            $cacheKey = "{0}:{1}" -f $candidate.ToLowerInvariant(), $AllowPackageScan.ToString().ToLowerInvariant()
+            if ($script:SmartShellExeCache.ContainsKey($cacheKey)) {
+                $cached = $script:SmartShellExeCache[$cacheKey]
+                if ($cached) { return $cached }
+                continue
+            }
+
+            $cmd = Get-Command $candidate -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($cmd) {
+                $script:SmartShellExeCache[$cacheKey] = $cmd.Source
+                return $cmd.Source
+            }
+
+            foreach ($dir in @($winGetLinks, 'C:\Program Files\Git\shims')) {
+                if (-not [string]::IsNullOrWhiteSpace($dir)) {
+                    $path = Join-Path $dir $candidate
+                    if (Test-Path -LiteralPath $path -PathType Leaf) {
+                        $script:SmartShellExeCache[$cacheKey] = $path
+                        return $path
+                    }
+                }
+            }
+
+            if ($AllowPackageScan -and (Test-Path -LiteralPath $winGetPackages)) {
+                $pkgPath = Get-ChildItem -Path $winGetPackages -Recurse -Filter $candidate -File -ErrorAction SilentlyContinue |
+                    Select-Object -First 1 -ExpandProperty FullName
+                if ($pkgPath) {
+                    $script:SmartShellExeCache[$cacheKey] = $pkgPath
+                    return $pkgPath
+                }
+            }
+
+            $script:SmartShellExeCache[$cacheKey] = $null
+        }
+    }
+
+    function global:Enable-UnixInteractiveFeatures {
+        if ($script:UnixInteractiveFeaturesEnabled) {
+            return
+        }
+
+        foreach ($module in @(
+__MODULE_LINES__
+        )) {
+            if (Get-Module -ListAvailable $module) {
+                Import-Module $module -ErrorAction SilentlyContinue
+            }
+        }
+
+        if (Get-Module PSReadLine -ErrorAction SilentlyContinue) {
+            if (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
+                try {
+                    $predictionSource = if (Get-Module CompletionPredictor -ErrorAction SilentlyContinue) { 'HistoryAndPlugin' } else { 'History' }
+                    Set-PSReadLineOption -PredictionSource $predictionSource
+                    Set-PSReadLineOption -PredictionViewStyle InlineView
+                }
+                catch {
+                    Write-Verbose "PSReadLine interactive features unavailable: $($_.Exception.Message)"
+                }
+            }
+        }
+
+        if (Get-Command Set-PsFzfOption -ErrorAction SilentlyContinue) {
+            Set-PsFzfOption -EnableAliasFuzzyZLocation:$true -AltCCommand { Invoke-FuzzyZLocation }
+        }
+
+        $script:UnixInteractiveFeaturesEnabled = $true
+    }
+
+    if (Get-Module -ListAvailable PSReadLine) {
+        Import-Module PSReadLine -ErrorAction SilentlyContinue
+        if (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
+            try {
+                Set-PSReadLineOption -PredictionSource History
+                Set-PSReadLineOption -PredictionViewStyle InlineView
+            }
+            catch {
+                Write-Verbose "PSReadLine prediction setup unavailable: $($_.Exception.Message)"
+            }
+        }
+    }
+
+__LEGACY_INIT__
+    $zoxideExe = Resolve-SmartShellExecutable -Candidates @('zoxide.exe', 'zoxide.cmd')
+    if ($zoxideExe) {
+        Invoke-Expression (& $zoxideExe init powershell --cmd j | Out-String)
+    }
+
+    function global:y {
+        $yaziExe = Resolve-SmartShellExecutable -Candidates @('yazi.exe', 'ya.exe', 'yazi.cmd', 'ya.cmd') -AllowPackageScan
+        if (-not $yaziExe) {
+            throw "yazi is not available on PATH. Re-run setup with -InstallOptionalTools or restart PowerShell."
+        }
+
+        $tmp = (New-TemporaryFile).FullName
+        try {
+            & $yaziExe @args --cwd-file="$tmp"
+            if (Test-Path -LiteralPath $tmp) {
+                $cwd = Get-Content -Path $tmp -Encoding UTF8 -ErrorAction SilentlyContinue
+                if ($cwd -and $cwd -ne $PWD.Path -and (Test-Path -LiteralPath $cwd -PathType Container)) {
+                    Set-Location -LiteralPath (Resolve-Path -LiteralPath $cwd).Path
+                }
+            }
+        }
+        finally {
+            Remove-Item -Path $tmp -ErrorAction SilentlyContinue
+        }
+    }
+
+    function global:lg {
+        $lazygitExe = Resolve-SmartShellExecutable -Candidates @('lazygit.exe', 'lazygit.cmd') -AllowPackageScan
+        if (-not $lazygitExe) {
+            throw "lazygit is not available on PATH. Re-run setup with -InstallOptionalTools."
+        }
+
+        $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("lazygit-cwd-{0}.txt" -f [guid]::NewGuid())
+        try {
+            $env:LAZYGIT_NEW_DIR_FILE = $tmp
+            & $lazygitExe @args
+            if (Test-Path -LiteralPath $tmp) {
+                $cwd = (Get-Content -Path $tmp -Encoding UTF8 -ErrorAction SilentlyContinue | Select-Object -First 1)
+                if ($cwd -and $cwd -ne $PWD.Path -and (Test-Path -LiteralPath $cwd -PathType Container)) {
+                    Set-Location -LiteralPath (Resolve-Path -LiteralPath $cwd).Path
+                }
+            }
+        }
+        finally {
+            Remove-Item env:LAZYGIT_NEW_DIR_FILE -ErrorAction SilentlyContinue
+            Remove-Item -Path $tmp -ErrorAction SilentlyContinue
+        }
+    }
+}
+'@
+
+    $blockBody = $blockBody.Replace('__STARTUP_MODE__', $StartupMode)
+    $blockBody = $blockBody.Replace('__MODULE_LINES__', $moduleLines)
+    $blockBody = $blockBody.Replace('__LEGACY_INIT__', $legacyInit)
+    return $blockBody
+}
+
+function Get-ProfilePromptBlockBody {
+    param(
+        [Parameter(Mandatory = $true)][string]$ThemesDir,
+        [string]$Theme = 'pure',
+        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Lazy'
+    )
+
+    if ($PromptInitMode -eq 'Off') {
+        return $null
+    }
+
+    $configPath = Join-Path $ThemesDir ("{0}.omp.json" -f $Theme)
+    if ($PromptInitMode -eq 'Eager') {
+        $blockBody = @'
+# Oh My Posh theme configuration
+# Prompt init mode: Eager
+if (Get-Command oh-my-posh -ErrorAction SilentlyContinue) {
+    $configPath = "__CONFIG_PATH__"
+    oh-my-posh init pwsh --config "$configPath" | Invoke-Expression
+}
+'@
+        return $blockBody.Replace('__CONFIG_PATH__', $configPath)
+    }
+
+    $blockBody = @'
+# Oh My Posh theme configuration
+# Prompt init mode: Lazy
+if (Get-Command oh-my-posh -ErrorAction SilentlyContinue) {
+    $configPath = "__CONFIG_PATH__"
+    $script:UnixToolsPromptState = 'Pending'
+    $script:UnixToolsPromptWarningShown = $false
+
+    function global:Get-UnixToolsMinimalPrompt {
+        return "PS $($executionContext.SessionState.Path.CurrentLocation)$('>' * ($nestedPromptLevel + 1)) "
+    }
+
+    function global:Initialize-UnixToolsPrompt {
+        if ($script:UnixToolsPromptState -eq 'Loaded') { return $true }
+        if ($script:UnixToolsPromptState -eq 'Failed') { return $false }
+
+        try {
+            oh-my-posh init pwsh --config "$configPath" | Invoke-Expression
+            $script:UnixToolsPromptState = 'Loaded'
+            return $true
+        }
+        catch {
+            $script:UnixToolsPromptState = 'Failed'
+            if (-not $script:UnixToolsPromptWarningShown) {
+                Write-Warning "oh-my-posh init failed: $($_.Exception.Message)"
+                $script:UnixToolsPromptWarningShown = $true
+            }
+            return $false
+        }
+    }
+
+    function global:prompt {
+        if ($script:UnixToolsPromptState -eq 'Pending') {
+            $script:UnixToolsPromptState = 'Warmup'
+            return Get-UnixToolsMinimalPrompt
+        }
+
+        if ($script:UnixToolsPromptState -eq 'Warmup') {
+            if (Initialize-UnixToolsPrompt) {
+                $currentPrompt = Get-Command prompt -CommandType Function -ErrorAction SilentlyContinue
+                if ($currentPrompt -and $currentPrompt.ScriptBlock -ne $MyInvocation.MyCommand.ScriptBlock) {
+                    return & $currentPrompt.ScriptBlock
+                }
+            }
+        }
+
+        return Get-UnixToolsMinimalPrompt
+    }
+}
+'@
+
+    return $blockBody.Replace('__CONFIG_PATH__', $configPath)
+}
+
+function Find-LegacyInlineShimBlock {
+    param([Parameter(Mandatory = $true)][string]$ProfilePath)
+
+    $result = [ordered]@{
+        Found      = $false
+        Removed    = $false
+        Status     = 'NotFound'
+        StartLine  = $null
+        EndLine    = $null
+        HeaderLine = $null
+        GuardLine  = $null
+        Detail     = ''
+    }
+
+    if (-not (Test-Path -LiteralPath $ProfilePath -PathType Leaf)) {
+        return [pscustomobject]$result
+    }
+
+    $lines = Get-Content -Path $ProfilePath -ErrorAction SilentlyContinue
+    if (-not $lines) {
+        return [pscustomobject]$result
+    }
+
+    $headerMatches = @()
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match 'Fast Unix-like shims for PowerShell \(\$PROFILE\)') {
+            $headerMatches += $i
+        }
+    }
+
+    if ($headerMatches.Count -gt 1) {
+        $result.Status = 'Ambiguous'
+        $result.Detail = 'Multiple legacy inline shim headers found.'
+        return [pscustomobject]$result
+    }
+
+    if ($headerMatches.Count -eq 0) {
+        return [pscustomobject]$result
+    }
+
+    $headerIndex = $headerMatches[0]
+    $guardMatches = @()
+    $guardSearchEnd = [Math]::Min($lines.Count - 1, $headerIndex + 60)
+    for ($i = $headerIndex; $i -le $guardSearchEnd; $i++) {
+        if ($lines[$i].Trim() -eq 'if (-not $script:__UnixShimsInitialized) {') {
+            $guardMatches += $i
+        }
+    }
+
+    if ($guardMatches.Count -ne 1) {
+        $result.Status = 'Ambiguous'
+        $result.Detail = 'Could not uniquely identify the legacy inline shim guard.'
+        return [pscustomobject]$result
+    }
+
+    $guardIndex = $guardMatches[0]
+    $startIndex = $headerIndex
+    while ($startIndex -gt 0) {
+        $previousLine = $lines[$startIndex - 1]
+        if ([string]::IsNullOrWhiteSpace($previousLine) -or $previousLine.TrimStart().StartsWith('#')) {
+            $startIndex--
+            continue
+        }
+        break
+    }
+
+    $braceDepth = 0
+    $sawOpeningBrace = $false
+    $endIndex = $null
+    for ($i = $guardIndex; $i -lt $lines.Count; $i++) {
+        foreach ($character in $lines[$i].ToCharArray()) {
+            if ($character -eq '{') {
+                $braceDepth++
+                $sawOpeningBrace = $true
+                continue
+            }
+
+            if ($character -eq '}') {
+                if ($sawOpeningBrace) {
+                    $braceDepth--
+                    if ($braceDepth -eq 0) {
+                        $endIndex = $i
+                        break
+                    }
+                }
+            }
+        }
+
+        if ($null -ne $endIndex) {
+            break
+        }
+    }
+
+    if ($null -eq $endIndex) {
+        $result.Status = 'Ambiguous'
+        $result.Detail = 'Could not determine the end of the legacy inline shim block.'
+        return [pscustomobject]$result
+    }
+
+    $result.Found = $true
+    $result.Status = 'Found'
+    $result.StartLine = $startIndex + 1
+    $result.EndLine = $endIndex + 1
+    $result.HeaderLine = $headerIndex + 1
+    $result.GuardLine = $guardIndex + 1
+    $result.Detail = "legacy inline shim block lines $($result.StartLine)-$($result.EndLine)"
+    return [pscustomobject]$result
+}
+
+function Remove-LegacyInlineProfileShims {
+    param([Parameter(Mandatory = $true)][string]$ProfilePath)
+
+    $block = Find-LegacyInlineShimBlock -ProfilePath $ProfilePath
+    if ($block.Status -ne 'Found') {
+        return $block
+    }
+
+    $lines = Get-Content -Path $ProfilePath -ErrorAction SilentlyContinue
+    if ($null -eq $lines) {
+        return [pscustomobject]@{
+            Found      = $false
+            Removed    = $false
+            Status     = 'NotFound'
+            StartLine  = $null
+            EndLine    = $null
+            HeaderLine = $null
+            GuardLine  = $null
+            Detail     = 'Profile file disappeared before legacy cleanup.'
+        }
+    }
+
+    $updatedLines = New-Object System.Collections.Generic.List[string]
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $lineNumber = $i + 1
+        if ($lineNumber -ge $block.StartLine -and $lineNumber -le $block.EndLine) {
+            continue
+        }
+        $updatedLines.Add($lines[$i]) | Out-Null
+    }
+
+    $updated = $updatedLines -join "`r`n"
+    if ($updated.Length -gt 0 -and -not $updated.EndsWith("`r`n")) {
+        $updated += "`r`n"
+    }
+
+    if ($script:DryRun) {
+        Write-Host "[DRYRUN] Set-Content '$ProfilePath' (removed legacy inline profile shim block)" -ForegroundColor DarkGray
+    }
+    else {
+        $tmp = "$ProfilePath.tmp"
+        try {
+            Set-Content -Path $tmp -Value $updated -Encoding UTF8
+            Move-Item -Path $tmp -Destination $ProfilePath -Force
+        }
+        catch {
+            Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
+            throw
+        }
+    }
+
+    $block.Removed = $true
+    $block.Status = 'Removed'
+    return $block
+}
+
+function Get-ProfileMetadataValue {
+    param(
+        [string]$Text,
+        [Parameter(Mandatory = $true)][string]$Key
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $null
+    }
+
+    $pattern = "(?m)^\s*#\s*$([regex]::Escape($Key)):\s*(.+?)\s*$"
+    $match = [regex]::Match($Text, $pattern)
+    if ($match.Success) {
+        return $match.Groups[1].Value.Trim()
+    }
+
+    return $null
+}
+
+function Get-ProfileInstallationState {
+    param([Parameter(Mandatory = $true)][string]$ProfilePath)
+
+    $profileText = Get-Content -Path $ProfilePath -Raw -ErrorAction SilentlyContinue
+    $hasMissingBlock = $profileText -and $profileText.Contains("# >>> unix-tools-missing-shims >>>") -and $profileText.Contains("# <<< unix-tools-missing-shims <<<")
+    $hasAliasBlock = $profileText -and $profileText.Contains("# >>> unix-tools-alias-compat >>>") -and $profileText.Contains("# <<< unix-tools-alias-compat <<<")
+    $hasSmartShellBlock = $profileText -and $profileText.Contains("# >>> unix-tools-smart-shell >>>") -and $profileText.Contains("# <<< unix-tools-smart-shell <<<")
+    $hasTerminalBlock = $profileText -and $profileText.Contains("# >>> unix-tools-terminal-setup >>>") -and $profileText.Contains("# <<< unix-tools-terminal-setup <<<")
+    $hasFastBlock = $profileText -and $profileText.Contains("# >>> unix-tools-fast-shims >>>") -and $profileText.Contains("# <<< unix-tools-fast-shims <<<")
+    $legacyBlock = Find-LegacyInlineShimBlock -ProfilePath $ProfilePath
+
+    [pscustomobject]@{
+        HasManagedBlocks     = ($hasMissingBlock -and $hasAliasBlock -and $hasSmartShellBlock)
+        HasMissingBlock      = [bool]$hasMissingBlock
+        HasAliasBlock        = [bool]$hasAliasBlock
+        HasSmartShellBlock   = [bool]$hasSmartShellBlock
+        HasTerminalBlock     = [bool]$hasTerminalBlock
+        HasLegacyFastBlock   = [bool]$hasFastBlock
+        LegacyInlineStatus   = $legacyBlock.Status
+        HasLegacyInlineBlock = [bool]$legacyBlock.Found
+        StartupMode          = if ($hasSmartShellBlock) { Get-ProfileMetadataValue -Text $profileText -Key 'Startup mode' } else { 'NotInstalled' }
+        PromptInitMode       = if ($hasTerminalBlock) { Get-ProfileMetadataValue -Text $profileText -Key 'Prompt init mode' } else { 'Off' }
+    }
 }
 
 function Install-MissingOptionalPowerShellModules([object[]]$Catalog) {
@@ -821,7 +1326,7 @@ function Install-MissingOptionalPowerShellModules([object[]]$Catalog) {
     return $newlyInstalled
 }
 
-function Download-TerminalThemes {
+function Save-TerminalThemes {
     param([Parameter(Mandatory = $true)][string]$ThemesDir)
 
     if ($script:DryRun) {
@@ -1012,13 +1517,12 @@ function Set-TerminalFonts {
 
 function Install-TerminalSetup {
     param(
-        [Parameter(Mandatory = $true)][string]$ThemesDir,
-        [string]$Theme = "pure"
+        [Parameter(Mandatory = $true)][string]$ThemesDir
     )
 
     Write-Section "Terminal Setup"
     
-    Download-TerminalThemes -ThemesDir $ThemesDir
+    Save-TerminalThemes -ThemesDir $ThemesDir
     Install-NerdFont
     Set-TerminalFonts
 }
@@ -1081,7 +1585,7 @@ function Get-CoreShimToolCatalog {
     )
 }
 
-function Ensure-OptionalPackageManagers {
+function Initialize-OptionalPackageManagers {
     $wingetAvailable = [bool](Get-Command winget -ErrorAction SilentlyContinue)
     $chocoAvailable = [bool](Get-Command choco  -ErrorAction SilentlyContinue)
 
@@ -1177,7 +1681,7 @@ function Write-OptionalToolState([object[]]$Records) {
 function Install-MissingOptionalTools([object[]]$Catalog) {
     if (-not $Catalog -or $Catalog.Count -eq 0) { return @() }
 
-    $pmProbe = @(Ensure-OptionalPackageManagers)
+    $pmProbe = @(Initialize-OptionalPackageManagers)
     $pm = @(
         $pmProbe | Where-Object {
             $_ -and
@@ -1448,7 +1952,12 @@ function Start-ScriptTranscript([string]$Path) {
 }
 
 function Stop-ScriptTranscript {
-    try { Stop-Transcript | Out-Null } catch {}
+    try {
+        Stop-Transcript | Out-Null
+    }
+    catch {
+        Write-Verbose "No active transcript to stop: $($_.Exception.Message)"
+    }
 }
 
 function Send-EnvironmentChange {
@@ -1474,7 +1983,7 @@ public class NativeMethods {
         ) | Out-Null
     }
     catch {
-        # non-fatal
+        Write-Verbose "WM_SETTINGCHANGE broadcast failed: $($_.Exception.Message)"
     }
 }
 
@@ -1670,12 +2179,26 @@ function Remove-InstalledProfileShims {
     foreach ($m in $markers) {
         Remove-ProfileBlock -ProfilePath $profilePath -StartMarker $m.Start -EndMarker $m.End
     }
+
+    $legacyResult = Remove-LegacyInlineProfileShims -ProfilePath $profilePath
+    switch ($legacyResult.Status) {
+        'Removed' {
+            Write-Status -Type ok -Label "Legacy inline shims" -Detail $legacyResult.Detail
+        }
+        'Ambiguous' {
+            Write-Status -Type warn -Label "Legacy inline shims" -Detail $legacyResult.Detail
+        }
+    }
+
+    return $legacyResult
 }
 
 function Install-ProfileInlineShims {
     param(
         [string]$ThemesDir,
-        [string]$Theme = "pure"
+        [string]$Theme = "pure",
+        [ValidateSet('Fast', 'Legacy')][string]$StartupMode = 'Fast',
+        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptMode = 'Lazy'
     )
     $profilePath = $PROFILE.CurrentUserCurrentHost
     $backup = Backup-ProfileFile -ProfilePath $profilePath
@@ -1684,11 +2207,11 @@ function Install-ProfileInlineShims {
     Remove-InstalledProfileShims
     Install-ProfileMissingShims
     Install-ProfileAliasCompat
-    Install-ProfileSmartShell
-    if ($ThemesDir) {
-        Install-ProfileOhMyPosh -ThemesDir $ThemesDir -Theme $Theme
+    Install-ProfileSmartShell -StartupMode $StartupMode
+    if ($ThemesDir -and $PromptMode -ne 'Off') {
+        Install-ProfileOhMyPosh -ThemesDir $ThemesDir -Theme $Theme -PromptInitMode $PromptMode
     }
-    Write-Status -Type ok -Label "Profile blocks" -Detail "inline (missing + alias-compat + smart-shell + terminal-setup) -> $profilePath"
+    Write-Status -Type ok -Label "Profile blocks" -Detail "inline (startup=$StartupMode, prompt=$PromptMode) -> $profilePath"
     return "inline"
 }
 
@@ -3290,7 +3813,8 @@ Set-UnixCommand -Name "sleep" -Fallback {
 function Install-ProfileOhMyPosh {
     param(
         [Parameter(Mandatory = $true)][string]$ThemesDir,
-        [string]$Theme = "pure"
+        [string]$Theme = "pure",
+        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Lazy'
     )
     $profilePath = $PROFILE.CurrentUserCurrentHost
     $backup = Backup-ProfileFile -ProfilePath $profilePath
@@ -3299,150 +3823,31 @@ function Install-ProfileOhMyPosh {
     $startMarker = "# >>> unix-tools-terminal-setup >>>"
     $endMarker = "# <<< unix-tools-terminal-setup <<<"
 
-    $blockBody = @"
-# Oh My Posh theme configuration
-if (Get-Command oh-my-posh -ErrorAction SilentlyContinue) {
-    `$themesDir = "$ThemesDir"
-    oh-my-posh init pwsh --config "`$themesDir\$Theme.omp.json" | Invoke-Expression
-}
-"@
+    $blockBody = Get-ProfilePromptBlockBody -ThemesDir $ThemesDir -Theme $Theme -PromptInitMode $PromptInitMode
+    if ([string]::IsNullOrWhiteSpace($blockBody)) {
+        Remove-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker
+        Write-Status -Type ok -Label "Profile blocks" -Detail "terminal-setup skipped (prompt mode Off)"
+        return
+    }
 
     Set-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody
-    Write-Status -Type ok -Label "Profile blocks" -Detail "terminal-setup updated -> $profilePath"
+    Write-Status -Type ok -Label "Profile blocks" -Detail "terminal-setup updated ($PromptInitMode) -> $profilePath"
 }
 
 function Install-ProfileSmartShell {
+    param(
+        [ValidateSet('Fast', 'Legacy')][string]$StartupMode = 'Fast'
+    )
+
     $profilePath = $PROFILE.CurrentUserCurrentHost
     $backup = Backup-ProfileFile -ProfilePath $profilePath
     if ($backup) { Write-Verbose "Profile backup: $backup" }
     $startMarker = "# >>> unix-tools-smart-shell >>>"
     $endMarker = "# <<< unix-tools-smart-shell <<<"
 
-    $blockBody = @'
-# Enable smart-shell integrations: prediction, fuzzy navigation, Git/file explorers.
-if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
-    $winGetLinks = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'
-    $winGetPackages = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
-    if ((Test-Path -LiteralPath $winGetLinks) -and -not (($env:PATH -split ';') -contains $winGetLinks)) {
-        $env:PATH = "$winGetLinks;$env:PATH"
-    }
-
-    function global:Resolve-SmartShellExecutable {
-        param(
-            [Parameter(Mandatory = $true)]
-            [string[]]$Candidates
-        )
-
-        foreach ($candidate in $Candidates) {
-            $cmd = Get-Command $candidate -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($cmd) {
-                return $cmd.Source
-            }
-
-            foreach ($dir in @($winGetLinks, 'C:\Program Files\Git\shims')) {
-                if (-not [string]::IsNullOrWhiteSpace($dir)) {
-                    $path = Join-Path $dir $candidate
-                    if (Test-Path -LiteralPath $path -PathType Leaf) {
-                        return $path
-                    }
-                }
-            }
-
-            if (Test-Path -LiteralPath $winGetPackages) {
-                $pkgPath = Get-ChildItem -Path $winGetPackages -Recurse -Filter $candidate -File -ErrorAction SilentlyContinue |
-                    Select-Object -First 1 -ExpandProperty FullName
-                if ($pkgPath) {
-                    return $pkgPath
-                }
-            }
-        }
-    }
-
-    if (Get-Module -ListAvailable PSReadLine) {
-        Import-Module PSReadLine -ErrorAction SilentlyContinue
-        if (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
-            try {
-                Set-PSReadLineOption -PredictionSource HistoryAndPlugin
-                Set-PSReadLineOption -PredictionViewStyle InlineView
-            }
-            catch {
-                # Some hosts do not support predictive rendering.
-            }
-        }
-    }
-
-    foreach ($module in @(
-        'CompletionPredictor',
-        'Microsoft.WinGet.CommandNotFound',
-        'PSFzf',
-        'ZLocation',
-        'posh-git',
-        'Terminal-Icons',
-        'powershell-yaml',
-        'PSScriptAnalyzer'
-    )) {
-        if (Get-Module -ListAvailable $module) {
-            Import-Module $module -ErrorAction SilentlyContinue
-        }
-    }
-
-    if (Get-Command Set-PsFzfOption -ErrorAction SilentlyContinue) {
-        Set-PsFzfOption -EnableAliasFuzzyZLocation:$true -AltCCommand { Invoke-FuzzyZLocation }
-    }
-
-    $zoxideExe = Resolve-SmartShellExecutable -Candidates @('zoxide.exe', 'zoxide.cmd')
-    if ($zoxideExe) {
-        Invoke-Expression (& $zoxideExe init powershell --cmd j | Out-String)
-    }
-
-    function global:y {
-        $yaziExe = Resolve-SmartShellExecutable -Candidates @('yazi.exe', 'ya.exe', 'yazi.cmd', 'ya.cmd')
-        if (-not $yaziExe) {
-            throw "yazi is not available on PATH. Re-run setup with -InstallOptionalTools or restart PowerShell."
-        }
-
-        $tmp = (New-TemporaryFile).FullName
-        try {
-            & $yaziExe @args --cwd-file="$tmp"
-            if (Test-Path -LiteralPath $tmp) {
-                $cwd = Get-Content -Path $tmp -Encoding UTF8 -ErrorAction SilentlyContinue
-                if ($cwd -and $cwd -ne $PWD.Path -and (Test-Path -LiteralPath $cwd -PathType Container)) {
-                    Set-Location -LiteralPath (Resolve-Path -LiteralPath $cwd).Path
-                }
-            }
-        }
-        finally {
-            Remove-Item -Path $tmp -ErrorAction SilentlyContinue
-        }
-    }
-
-    function global:lg {
-        $lazygitExe = Resolve-SmartShellExecutable -Candidates @('lazygit.exe', 'lazygit.cmd')
-        if (-not $lazygitExe) {
-            throw "lazygit is not available on PATH. Re-run setup with -InstallOptionalTools."
-        }
-
-        $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("lazygit-cwd-{0}.txt" -f [guid]::NewGuid())
-        try {
-            $env:LAZYGIT_NEW_DIR_FILE = $tmp
-            & $lazygitExe @args
-            if (Test-Path -LiteralPath $tmp) {
-                $cwd = (Get-Content -Path $tmp -Encoding UTF8 -ErrorAction SilentlyContinue | Select-Object -First 1)
-                if ($cwd -and $cwd -ne $PWD.Path -and (Test-Path -LiteralPath $cwd -PathType Container)) {
-                    Set-Location -LiteralPath (Resolve-Path -LiteralPath $cwd).Path
-                }
-            }
-        }
-        finally {
-            Remove-Item env:LAZYGIT_NEW_DIR_FILE -ErrorAction SilentlyContinue
-            Remove-Item -Path $tmp -ErrorAction SilentlyContinue
-        }
-    }
-}
-'@
-
+    $blockBody = Get-ProfileSmartShellBlockBody -StartupMode $StartupMode
     Set-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody
-    Write-Status -Type ok -Label "Profile blocks" -Detail "smart-shell updated -> $profilePath"
+    Write-Status -Type ok -Label "Profile blocks" -Detail "smart-shell updated ($StartupMode) -> $profilePath"
 }
 
 # ======================== Main Script ========================
@@ -3458,6 +3863,9 @@ if ($InstallFull -and $Uninstall) {
 }
 if ($Uninstall -and ($CreateShims -or $AddMingw -or $AddGitCmd -or $InstallProfileShims -or $InstallOptionalTools -or $InstallTerminalSetup -or $InstallFull -or $UninstallFont)) {
     throw "Cannot combine -Uninstall with install switches. Use -Uninstall alone."
+}
+if ($UninstallOptionalTools -and -not $Uninstall) {
+    throw "-UninstallOptionalTools requires -Uninstall."
 }
 
 if ($InstallFull) {
@@ -3554,9 +3962,10 @@ try {
         $candidateShimDirs = $candidateShimDirs | Select-Object -Unique
 
         if ($PSCmdlet.ShouldProcess($PROFILE.CurrentUserCurrentHost, "Remove unix-tools profile shim blocks")) {
-            Remove-InstalledProfileShims
+            $removalResult = Remove-InstalledProfileShims
             $didChange = $true
-            Write-Status -Type ok -Label "Profile blocks removed" -Detail "unix-tools markers cleaned"
+            $removalDetail = if ($removalResult.Status -eq 'Removed') { "unix-tools markers cleaned + legacy inline block removed" } else { "unix-tools markers cleaned" }
+            Write-Status -Type ok -Label "Profile blocks removed" -Detail $removalDetail
         }
 
         $legacyFastScriptCandidates = @()
@@ -3608,7 +4017,12 @@ try {
                     }
                     else {
                         Get-ChildItem $sd -Filter *.cmd -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-                        try { Remove-Item $sd -Force -ErrorAction Stop } catch { }
+                        try {
+                            Remove-Item $sd -Force -ErrorAction Stop
+                        }
+                        catch {
+                            Write-Verbose "Shim directory not removed cleanly '$sd': $($_.Exception.Message)"
+                        }
                     }
                     $didChange = $true
                     Write-Status -Type ok -Label "Shim files removed" -Detail $sd
@@ -3616,15 +4030,20 @@ try {
             }
         }
 
-        if ($PSCmdlet.ShouldProcess("Optional tools", "Uninstall optional tools previously installed by this script")) {
-            $removedOptional = Uninstall-TrackedOptionalTools
-            if ($removedOptional -gt 0) {
-                $didChange = $true
-                Write-Status -Type ok -Label "Optional items removed" -Detail "$removedOptional item(s)"
+        if ($UninstallOptionalTools) {
+            if ($PSCmdlet.ShouldProcess("Optional tools", "Uninstall optional tools previously installed by this script")) {
+                $removedOptional = Uninstall-TrackedOptionalTools
+                if ($removedOptional -gt 0) {
+                    $didChange = $true
+                    Write-Status -Type ok -Label "Optional items removed" -Detail "$removedOptional item(s)"
+                }
+                else {
+                    Write-Status -Type info -Label "Optional tools" -Detail "none tracked"
+                }
             }
-            else {
-                Write-Status -Type info -Label "Optional tools" -Detail "none tracked"
-            }
+        }
+        else {
+            Write-Status -Type info -Label "Optional tools" -Detail "preserved (use -UninstallOptionalTools to remove tracked items)"
         }
 
         if ($didChange) {
@@ -3680,7 +4099,7 @@ try {
     # ======================== Terminal Setup ========================
     if ($InstallTerminalSetup) {
         if ($PSCmdlet.ShouldProcess("Terminal Setup", "Install Oh My Posh themes and Nerd Fonts")) {
-            Install-TerminalSetup -ThemesDir $ThemesDir -Theme $Theme
+            Install-TerminalSetup -ThemesDir $ThemesDir
             $didChange = $true
         }
     }
@@ -3872,7 +4291,7 @@ try {
     if ($InstallProfileShims) {
         Write-Section "Profile"
         if ($PSCmdlet.ShouldProcess($PROFILE.CurrentUserCurrentHost, "Install/update unix-tools profile shim blocks")) {
-            Install-ProfileInlineShims -ThemesDir $ThemesDir -Theme $Theme
+            Install-ProfileInlineShims -ThemesDir $ThemesDir -Theme $Theme -StartupMode $ProfileStartupMode -PromptMode $PromptInitMode
             $profilePath = $PROFILE.CurrentUserCurrentHost
             $expectedHash = $null
             if (Test-Path $profilePath) {
@@ -3899,7 +4318,7 @@ try {
             catch {
                 Write-Status -Type warn -Label "Profile reload failed" -Detail $_.Exception.Message
             }
-            Write-Status -Type ok -Label "Profile shims written" -Detail "missing-command + alias-compat + smart-shell"
+            Write-Status -Type ok -Label "Profile shims written" -Detail "missing-command + alias-compat + smart-shell ($ProfileStartupMode / $PromptInitMode)"
             $didChange = $true
         }
         else {
@@ -3967,24 +4386,32 @@ try {
             Write-Status -Type info -Label "Profile blocks" -Detail "skipped in DryRun"
         }
         else {
-            $profileText = Get-Content -Path $profilePath -Raw -ErrorAction SilentlyContinue
-            $hasMissingBlock = $profileText -and $profileText.Contains("# >>> unix-tools-missing-shims >>>") -and $profileText.Contains("# <<< unix-tools-missing-shims <<<")
-            $hasAliasBlock = $profileText -and $profileText.Contains("# >>> unix-tools-alias-compat >>>") -and $profileText.Contains("# <<< unix-tools-alias-compat <<<")
-            $hasSmartShellBlock = $profileText -and $profileText.Contains("# >>> unix-tools-smart-shell >>>") -and $profileText.Contains("# <<< unix-tools-smart-shell <<<")
-            $hasFastBlock = $profileText -and $profileText.Contains("# >>> unix-tools-fast-shims >>>") -and $profileText.Contains("# <<< unix-tools-fast-shims <<<")
+            $profileState = Get-ProfileInstallationState -ProfilePath $profilePath
 
-            if ($hasMissingBlock -and $hasAliasBlock -and $hasSmartShellBlock) {
+            if ($profileState.HasManagedBlocks) {
                 Write-Status -Type ok -Label "Profile blocks" -Detail "present in `$PROFILE"
             }
-            elseif ($hasMissingBlock -or $hasAliasBlock -or $hasSmartShellBlock) {
+            elseif ($profileState.HasMissingBlock -or $profileState.HasAliasBlock -or $profileState.HasSmartShellBlock) {
                 Write-Status -Type warn -Label "Profile blocks" -Detail "partial install detected"
             }
-            elseif ($hasFastBlock) {
+            elseif ($profileState.HasLegacyFastBlock) {
                 Write-Status -Type warn -Label "Profile blocks" -Detail "legacy fast-shim detected (re-run -InstallProfileShims)"
             }
             else {
                 Write-Status -Type fail -Label "Profile blocks" -Detail "not found in `$PROFILE"
             }
+
+            $legacyDetail = switch ($profileState.LegacyInlineStatus) {
+                'Found' { 'present (cleanup still needed)' }
+                'Ambiguous' { 'ambiguous signature detected (manual review needed)' }
+                default { 'not detected' }
+            }
+            $startupModeDetail = if ([string]::IsNullOrWhiteSpace($profileState.StartupMode)) { 'Unknown' } else { $profileState.StartupMode }
+            $promptModeDetail = if ([string]::IsNullOrWhiteSpace($profileState.PromptInitMode)) { 'Unknown' } else { $profileState.PromptInitMode }
+
+            Write-Status -Type info -Label "Legacy inline shims" -Detail $legacyDetail
+            Write-Status -Type info -Label "Startup mode" -Detail $startupModeDetail
+            Write-Status -Type info -Label "Prompt init mode" -Detail $promptModeDetail
         }
     }
 

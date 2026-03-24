@@ -9,9 +9,16 @@ function Enable-UnixTools {
         [switch]$NormalizePath,
         [switch]$InstallProfileShims,
         [switch]$InstallOptionalTools,
+        [switch]$InstallTerminalSetup,
         [switch]$InstallFull,
         [switch]$UserScope,
         [switch]$Uninstall,
+        [switch]$UninstallOptionalTools,
+        [switch]$UninstallFont,
+        [string]$Theme = 'lightgreen',
+        [string]$ThemesDir,
+        [ValidateSet('Fast', 'Legacy')][string]$ProfileStartupMode = 'Fast',
+        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Lazy',
         [string]$LogPath,
         [Alias('h')]
         [switch]$Help,
@@ -25,9 +32,21 @@ function Enable-UnixTools {
         throw "Installer script not found: $scriptPath"
     }
 
+    $wrapperHandlesShouldProcess = $PSBoundParameters.ContainsKey('WhatIf') -or $PSBoundParameters.ContainsKey('Confirm')
+    if ($wrapperHandlesShouldProcess) {
+        $scopeTarget = if ($UserScope) { 'User scope' } else { 'Machine scope' }
+        $operation = if ($Uninstall) { 'Invoke unix-tools uninstall' } else { 'Invoke unix-tools installer' }
+        if (-not $PSCmdlet.ShouldProcess($scopeTarget, $operation)) {
+            return
+        }
+    }
+
     $invokeParams = @{}
     foreach ($entry in $PSBoundParameters.GetEnumerator()) {
         if ($entry.Key -eq 'ArgumentList') {
+            continue
+        }
+        if ($wrapperHandlesShouldProcess -and ($entry.Key -eq 'Confirm' -or $entry.Key -eq 'WhatIf')) {
             continue
         }
         $invokeParams[$entry.Key] = $entry.Value
