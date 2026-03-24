@@ -122,6 +122,7 @@ param(
     [switch]$InstallFull,
     [switch]$UserScope,
     [switch]$Uninstall,
+    [switch]$UninstallFont,
     [string]$Theme = "lightgreen",
     [string]$ThemesDir,
     [string]$LogPath,
@@ -494,7 +495,6 @@ function Add-MachinePathPrepend([string]$pathToPrepend) {
 
     $parts = $current.Split(';') | Where-Object { $_ -and $_.Trim() -ne "" }
 
-    # Remove existing entry (case-insensitive)
     $parts = $parts | Where-Object {
         -not $_.Trim().TrimEnd('\').Equals($norm, [StringComparison]::OrdinalIgnoreCase)
     }
@@ -608,7 +608,6 @@ function New-DirectoryIfMissing([string]$dir) {
         }
     }
     else {
-        # Use -Force for idempotent creation; eliminates TOCTOU race between Test-Path and New-Item.
         New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
     }
 }
@@ -645,7 +644,6 @@ function Find-ToolInPath([string]$toolName, [string]$excludeDir = $null, [hashta
         return $AppIndex[$toolName]
     }
 
-    # Search system PATH for a real executable (useful for ripgrep and non-Git tools).
     try {
         $apps = Get-Command $toolName -CommandType Application -All -ErrorAction SilentlyContinue
         if (-not $apps) { return $null }
@@ -700,7 +698,6 @@ function Get-OptionalToolCatalog {
         [pscustomobject]@{ Command = "fzf"; WingetId = "junegunn.fzf"; ChocoId = "fzf" },
         [pscustomobject]@{ Command = "ag"; WingetId = "JFLarvoire.Ag"; ChocoId = "ag" },
         
-        # Expanded modern tools
         [pscustomobject]@{ Command = "zoxide"; WingetId = "ajeetdsouza.zoxide"; ChocoId = "zoxide" },
         [pscustomobject]@{ Command = "delta"; WingetId = "dandavison.delta"; ChocoId = "delta" },
         [pscustomobject]@{ Command = "gh"; WingetId = "GitHub.cli"; ChocoId = "gh" },
@@ -859,7 +856,6 @@ function Install-NerdFont {
         return
     }
 
-    # File-system check: look for CascadiaCode/CaskaydiaCove font files in user and system font dirs.
     $fontDirs = @(
         (Join-Path $env:LOCALAPPDATA "Microsoft\Windows\Fonts"),
         (Join-Path $env:WINDIR "Fonts")
@@ -874,18 +870,7 @@ function Install-NerdFont {
         return
     }
 
-    # Fallback: check via System.Drawing font families.
-    try {
-        [System.Reflection.Assembly]::LoadWithPartialName("System.Drawing") | Out-Null
-        $installed = [System.Drawing.FontFamily]::Families | Where-Object { $_.Name -match "CaskaydiaCove" }
-        if ($installed) {
-            Write-Status -Type ok -Label "Nerd Font" -Detail "CaskaydiaCove already installed, skipping" -Indent
-            return
-        }
-    }
-    catch {
-        # System.Drawing might not be available in all PS environments, continue with install attempt.
-    }
+
 
     $zip = Join-Path $env:TEMP "CascadiaCode-$([guid]::NewGuid().ToString().Split('-')[0]).zip"
     $dir = Join-Path $env:TEMP "CascadiaCode-$([guid]::NewGuid().ToString().Split('-')[0])"
@@ -895,11 +880,32 @@ function Install-NerdFont {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         Expand-Archive -Path $zip -DestinationPath $dir -Force -ErrorAction Stop
         
-        Write-Status -Type detail -Label "Installing font" -Detail "copying to shell:fonts" -Indent
-        $shell = New-Object -ComObject Shell.Application
-        $fontFolder = $shell.Namespace(0x14) # Fonts folder
-        Get-ChildItem -Path $dir -Include "*.ttf","*.otf" -Recurse | ForEach-Object {
-            $fontFolder.CopyHere($_.FullName, 0x10) # 0x10 = No confirmation
+        Write-Status -Type detail -Label "Installing font" -Detail "copying to User and System Fonts (silent)" -Indent
+        
+        $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        $installLocations = @(
+            @{ Scope = "User"; Dir = Join-Path $env:LOCALAPPDATA "Microsoft\Windows\Fonts"; Reg = "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts" }
+        )
+        if ($isAdmin) {
+            $installLocations += @{ Scope = "System"; Dir = Join-Path $env:WINDIR "Fonts"; Reg = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts" }
+        }
+
+        foreach ($loc in $installLocations) {
+            if (-not (Test-Path $loc.Dir)) {
+                New-Item -ItemType Directory -Path $loc.Dir -Force | Out-Null
+            }
+        }
+        
+        Get-ChildItem -Path $dir -Include "*.ttf", "*.otf" -Recurse | ForEach-Object {
+            $fontKeyName = $_.BaseName
+            if ($_.Extension -eq ".ttf") { $fontKeyName += " (TrueType)" }
+            if ($_.Extension -eq ".otf") { $fontKeyName += " (OpenType)" }
+            
+            foreach ($loc in $installLocations) {
+                $targetPath = Join-Path $loc.Dir $_.Name
+                Copy-Item -Path $_.FullName -Destination $targetPath -Force
+                Set-ItemProperty -Path $loc.Reg -Name $fontKeyName -Value $targetPath -Force
+            }
         }
     }
     catch {
@@ -909,6 +915,99 @@ function Install-NerdFont {
         if (Test-Path $zip) { Remove-Item -Path $zip -Force -ErrorAction SilentlyContinue }
         if (Test-Path $dir) { Remove-Item -Path $dir -Recurse -Force -ErrorAction SilentlyContinue }
     }
+}
+
+function Uninstall-NerdFont {
+    Write-Status -Type detail -Label "Uninstalling font" -Detail "removing CaskaydiaCove from User and System Fonts" -Indent
+    $removedCount = 0
+
+    $fontLocations = @(
+        @{ Dir = Join-Path $env:LOCALAPPDATA "Microsoft\Windows\Fonts"; Reg = "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts" },
+        @{ Dir = Join-Path $env:WINDIR "Fonts"; Reg = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts" }
+    )
+
+    foreach ($loc in $fontLocations) {
+        # 1. Clean Registry (even if files are missing or moved)
+        if (Test-Path $loc.Reg) {
+            $regProps = Get-ItemProperty -Path $loc.Reg -ErrorAction SilentlyContinue
+            if ($regProps) {
+                # Find any property names containing Cascadia or Caskaydia
+                $matchingKeys = $regProps.PSObject.Properties | Where-Object { $_.Name -match "Cascadia|Caskaydia" } | ForEach-Object { $_.Name }
+                foreach ($key in $matchingKeys) {
+                    Remove-ItemProperty -Path $loc.Reg -Name $key -Force -ErrorAction SilentlyContinue
+                    $removedCount++
+                }
+            }
+        }
+
+        # 2. Clean Files
+        if (Test-Path $loc.Dir) {
+            $filesPath = Join-Path $loc.Dir "*Cas*.ttf"
+            $otfPath = Join-Path $loc.Dir "*Cas*.otf"
+            $fontFiles = @(Get-ChildItem -Path $filesPath -ErrorAction SilentlyContinue) + @(Get-ChildItem -Path $otfPath -ErrorAction SilentlyContinue)
+            foreach ($f in $fontFiles) {
+                if ($f.Name -match "CascadiaCode|CaskaydiaCove") {
+                    Remove-Item -Path $f.FullName -Force -ErrorAction SilentlyContinue
+                    $removedCount++
+                }
+            }
+        }
+    }
+    
+    if ($removedCount -gt 0) {
+        Write-Status -Type ok -Label "Nerd Font" -Detail "removed $removedCount font files/registry keys" -Indent
+        return $true
+    }
+    else {
+        Write-Status -Type info -Label "Nerd Font" -Detail "not found in User or System Fonts" -Indent
+        return $false
+    }
+}
+
+function Set-TerminalFonts {
+    Write-Status -Type detail -Label "Configuring Editors" -Detail "injecting CaskaydiaCove NF into WT and VSCode" -Indent
+    
+    # 1. Windows Terminal
+    $wtPaths = Get-ChildItem -Path "$env:LOCALAPPDATA\Packages" -Filter "Microsoft.WindowsTerminal*" -Directory -ErrorAction SilentlyContinue 
+    foreach ($wtDir in $wtPaths) {
+        $wtSettings = Join-Path $wtDir.FullName "LocalState\settings.json"
+        if (Test-Path $wtSettings) {
+            $content = Get-Content $wtSettings -Raw
+            if ($content -notmatch '"face"\s*:\s*"CaskaydiaCove[^"]*"' -and $content -notmatch '"fontFace"\s*:\s*"CaskaydiaCove[^"]*"') {
+                if ($content -match '"defaults"\s*:\s*\{\s*\}') {
+                    $content = $content -replace '"defaults"\s*:\s*\{\s*\}', '"defaults": { "font": { "face": "CaskaydiaCove NF" } }'
+                    Set-Content -Path $wtSettings -Value $content -Encoding UTF8
+                } elseif ($content -match '"defaults"\s*:\s*\{') {
+                    $content = $content -replace '("defaults"\s*:\s*\{)(\s*"[^"]+")', ('$1' + "`n            `"font`": { `"face`": `"CaskaydiaCove NF`" }," + '$2')
+                    Set-Content -Path $wtSettings -Value $content -Encoding UTF8
+                }
+            }
+        }
+    }
+
+    # 2. VS Code
+    $vscodeSettingsDirs = @(
+        (Join-Path $env:APPDATA "Code\User"),
+        (Join-Path $env:APPDATA "Code - Insiders\User")
+    )
+    foreach ($dir in $vscodeSettingsDirs) {
+        $vscodePath = Join-Path $dir "settings.json"
+        if (Test-Path $vscodePath) {
+            $content = Get-Content $vscodePath -Raw
+            if ($content -match '"editor\.fontFamily"\s*:') {
+                if ($content -notmatch 'CaskaydiaCove NF') {
+                    $content = $content -replace '("editor\.fontFamily"\s*:\s*)"([^"]+)"', ('$1"' + "CaskaydiaCove NF, `$2" + '"')
+                    Set-Content -Path $vscodePath -Value $content -Encoding UTF8
+                }
+            }
+            else {
+                $content = $content -replace '^\{\s*', "{`n    `"editor.fontFamily`": `"CaskaydiaCove NF, Consolas, 'Courier New', monospace`",`n"
+                Set-Content -Path $vscodePath -Value $content -Encoding UTF8
+            }
+        }
+    }
+    
+    Write-Status -Type ok -Label "Configuration" -Detail "WT and VSCode updated to use Nerd Font" -Indent
 }
 
 function Install-TerminalSetup {
@@ -921,6 +1020,7 @@ function Install-TerminalSetup {
     
     Download-TerminalThemes -ThemesDir $ThemesDir
     Install-NerdFont
+    Set-TerminalFonts
 }
 
 function Get-CoreShimToolCatalog {
@@ -1062,7 +1162,6 @@ function Write-OptionalToolState([object[]]$Records) {
         Write-Host "[DRYRUN] Set-Content '$statePath' (JSON data)" -ForegroundColor DarkGray
     }
     else {
-        # Atomic write: write to temp file then rename to avoid partial writes on crash.
         $tmp = "$statePath.tmp"
         try {
             Set-Content -Path $tmp -Value $json -Encoding UTF8
@@ -1078,8 +1177,6 @@ function Write-OptionalToolState([object[]]$Records) {
 function Install-MissingOptionalTools([object[]]$Catalog) {
     if (-not $Catalog -or $Catalog.Count -eq 0) { return @() }
 
-    # Defensive parse: external bootstrap commands can emit objects into the output stream.
-    # In StrictMode, directly reading $pm.Winget on a mixed array can throw.
     $pmProbe = @(Ensure-OptionalPackageManagers)
     $pm = @(
         $pmProbe | Where-Object {
@@ -1123,7 +1220,6 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
         if ([string]::IsNullOrWhiteSpace($commandName)) { continue }
 
         if (Get-Command $commandName -CommandType Application -ErrorAction SilentlyContinue) {
-            # Silently counted — reported as summary after loop by the caller
             continue
         }
 
@@ -1169,8 +1265,6 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
             }
         }
 
-        # Some package managers can return non-zero for benign states (already installed, partial update),
-        # so verify command availability before declaring failure.
         if (-not $installed) {
             Update-SessionPath
             if (Get-Command $commandName -CommandType Application -ErrorAction SilentlyContinue) {
@@ -1338,7 +1432,6 @@ function Uninstall-TrackedOptionalTools {
 
 function Start-ScriptTranscript([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
-    # Validate LogPath does not point inside Windows system directories.
     $resolved = [System.IO.Path]::GetFullPath($Path)
     $sensitiveRoots = @($env:WINDIR, $env:SYSTEMROOT) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
     foreach ($root in $sensitiveRoots) {
@@ -1392,7 +1485,6 @@ function Update-SessionPath {
 
 $script:ProfileBackupPath = $null
 function Backup-ProfileFile {
-    # NOTE: Only one backup per run. The first call captures pre-modification state.
     param([Parameter(Mandatory = $true)][string]$ProfilePath)
 
     if (-not (Test-Path $ProfilePath)) { return $null }
@@ -1446,8 +1538,7 @@ function Set-ProfileBlock {
         ""
     ) -join "`r`n"
 
-    # Normalize by removing any existing complete or orphaned marker lines first,
-    # then append exactly one canonical block.
+
     $blockPattern = "(?ms)^\s*$([regex]::Escape($StartMarker))\s*$.*?^\s*$([regex]::Escape($EndMarker))\s*(\r?\n)?"
     $startLinePattern = "(?m)^\s*$([regex]::Escape($StartMarker))\s*(\r?\n)?"
     $endLinePattern = "(?m)^\s*$([regex]::Escape($EndMarker))\s*(\r?\n)?"
@@ -1465,7 +1556,6 @@ function Set-ProfileBlock {
         Write-Host "[DRYRUN] Set-Content '$ProfilePath' (updated profile block)" -ForegroundColor DarkGray
     }
     else {
-        # Atomic write: write to temp file then rename to avoid partial writes on crash.
         $tmp = "$ProfilePath.tmp"
         try {
             Set-Content -Path $tmp -Value $updated -Encoding UTF8
@@ -1490,7 +1580,6 @@ function Remove-ProfileBlock {
     $existing = Get-Content -Path $ProfilePath -Raw -ErrorAction SilentlyContinue
     if ($null -eq $existing -or $existing.Length -eq 0) { return }
 
-    # Remove all complete marker blocks, plus any orphan marker lines.
     $pattern = "(?ms)^\s*$([regex]::Escape($StartMarker))\s*$.*?^\s*$([regex]::Escape($EndMarker))\s*(\r?\n)?"
     $updated = [regex]::Replace($existing, $pattern, "")
 
@@ -1550,7 +1639,6 @@ function Remove-ManagedProfileBlocks {
         Write-Host "[DRYRUN] Set-Content '$ProfilePath' (removed managed blocks)" -ForegroundColor DarkGray
     }
     else {
-        # Atomic write: temp+rename to prevent partial writes.
         $tmp = "$ProfilePath.tmp"
         try {
             Set-Content -Path $tmp -Value $updated -Encoding UTF8
@@ -1613,8 +1701,6 @@ function Install-ProfileMissingShims {
     $legacyStart = "# >>> git-tools-missing-shims >>>"
     $legacyEnd = "# <<< git-tools-missing-shims <<<"
 
-    # Keep startup fast: avoid generating hundreds of generic fallback stubs.
-    # Explicit shims below cover the commonly used commands.
     $genericFallbackBlock = ""
 
     $blockBody = @'
@@ -3370,7 +3456,7 @@ if ($Help) {
 if ($InstallFull -and $Uninstall) {
     throw "Cannot combine -InstallFull with -Uninstall. Choose one mode."
 }
-if ($Uninstall -and ($CreateShims -or $AddMingw -or $AddGitCmd -or $InstallProfileShims -or $InstallOptionalTools)) {
+if ($Uninstall -and ($CreateShims -or $AddMingw -or $AddGitCmd -or $InstallProfileShims -or $InstallOptionalTools -or $InstallTerminalSetup -or $InstallFull -or $UninstallFont)) {
     throw "Cannot combine -Uninstall with install switches. Use -Uninstall alone."
 }
 
@@ -3386,7 +3472,6 @@ if ($InstallFull) {
 
 $transcriptStarted = Start-ScriptTranscript -Path $LogPath
 try {
-    # Calculate default ThemesDir if not provided
     if (-not $ThemesDir) {
         $base = if ($script:PathScope -eq "User") {
             if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:USERPROFILE }
@@ -3397,14 +3482,13 @@ try {
         $ThemesDir = Join-Path $base "oh-my-posh-themes\themes"
     }
 
-    $installMode = if ($InstallFull) { "Full install" } elseif ($Uninstall) { "Uninstall" } else { "Custom" }
+    $installMode = if ($InstallFull) { "Full install" } elseif ($Uninstall -or $UninstallFont) { "Uninstall" } else { "Custom" }
     Write-Header -Mode $installMode
 
     if (-not (Assert-Admin)) {
         return
     }
 
-    # Backup current PATH before any mutations.
     if (-not $script:DryRun) {
         Backup-PathVariable -Scope $script:PathScope
     }
@@ -3415,7 +3499,7 @@ try {
         Write-Status -Type detail -Label "Git discovered" -Detail $gitRoot
     }
     catch {
-        if (-not $Uninstall) { throw }
+        if (-not $Uninstall -and -not $UninstallFont) { throw }
         Write-Status -Type info -Label "Git not found" -Detail "uninstall will clean known paths"
     }
 
@@ -3438,6 +3522,20 @@ try {
     }
 
     $didChange = $false
+
+    if ($UninstallFont) {
+        Write-Section "Uninstall Font"
+        if (Uninstall-NerdFont) {
+            $didChange = $true
+            Send-EnvironmentChange
+            Update-SessionPath
+        }
+
+        if (-not $Uninstall -and -not $InstallFull -and -not $CreateShims -and -not $AddMingw -and -not $AddGitCmd -and -not $NormalizePath -and -not $InstallProfileShims -and -not $InstallOptionalTools -and -not $InstallTerminalSetup) {
+            Write-Footer -Message "Font uninstall complete" -Type ok
+            return
+        }
+    }
 
     if ($Uninstall) {
         Write-Section "Uninstall"
@@ -3671,7 +3769,6 @@ try {
         }
     }
     else {
-        # Don't show section if not requested
     }
 
     # ======================== Shims ========================
@@ -3718,7 +3815,6 @@ try {
                 }
             }
 
-            # Shim optional third-party tools if installed
             foreach ($tool in $externalTools) {
                 $toolPath = Find-ToolInPath -toolName $tool -excludeDir $shimDir -AppIndex $appIndex
                 if ($toolPath) {
@@ -3731,7 +3827,6 @@ try {
 
             Add-MachinePathPrepend $shimDir
 
-            # Set restrictive ACLs on the shim directory.
             if (-not $script:DryRun) {
                 try {
                     if ($script:PathScope -eq "User") {
@@ -3778,7 +3873,6 @@ try {
         Write-Section "Profile"
         if ($PSCmdlet.ShouldProcess($PROFILE.CurrentUserCurrentHost, "Install/update unix-tools profile shim blocks")) {
             Install-ProfileInlineShims -ThemesDir $ThemesDir -Theme $Theme
-            # Capture hash immediately after writing so we can detect tampering before reload.
             $profilePath = $PROFILE.CurrentUserCurrentHost
             $expectedHash = $null
             if (Test-Path $profilePath) {
@@ -3813,7 +3907,6 @@ try {
         }
     }
     else {
-        # Don't show section if not requested
     }
 
     # ======================== Environment ========================
@@ -3899,7 +3992,6 @@ try {
 
     Write-Footer -Message "Done $($ui.Arrow) open a new terminal to use tools" -Type ok
 
-    # Compact try-it line
     $tryCommands = @("grep --version")
     if ($InstallProfileShims) { $tryCommands += @("ls -la", "'stressed' | rev") }
     if ($InstallOptionalTools) { $tryCommands += @("rg --version", "fd --version") }
