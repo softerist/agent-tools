@@ -859,17 +859,32 @@ function Install-NerdFont {
         return
     }
 
+    # File-system check: look for CascadiaCode/CaskaydiaCove font files in user and system font dirs.
+    $fontDirs = @(
+        (Join-Path $env:LOCALAPPDATA "Microsoft\Windows\Fonts"),
+        (Join-Path $env:WINDIR "Fonts")
+    )
+    $fontFileFound = $fontDirs | Where-Object { Test-Path $_ } | ForEach-Object {
+        (Get-ChildItem -Path $_ -Filter "CascadiaCode*" -ErrorAction SilentlyContinue),
+        (Get-ChildItem -Path $_ -Filter "CaskaydiaCove*" -ErrorAction SilentlyContinue)
+    } | Where-Object { $_ -ne $null } | Select-Object -First 1
+    
+    if ($fontFileFound) {
+        Write-Status -Type ok -Label "Nerd Font" -Detail "CaskaydiaCove already installed, skipping" -Indent
+        return
+    }
+
+    # Fallback: check via System.Drawing font families.
     try {
-        # Check if already installed
         [System.Reflection.Assembly]::LoadWithPartialName("System.Drawing") | Out-Null
         $installed = [System.Drawing.FontFamily]::Families | Where-Object { $_.Name -match "CaskaydiaCove" }
         if ($installed) {
-            Write-Status -Type ok -Label "Nerd Font" -Detail "CaskaydiaCove already installed" -Indent
+            Write-Status -Type ok -Label "Nerd Font" -Detail "CaskaydiaCove already installed, skipping" -Indent
             return
         }
     }
     catch {
-        # System.Drawing might not be available in all PS environments, continue with install attempt
+        # System.Drawing might not be available in all PS environments, continue with install attempt.
     }
 
     $zip = Join-Path $env:TEMP "CascadiaCode-$([guid]::NewGuid().ToString().Split('-')[0]).zip"
@@ -1157,7 +1172,7 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
         # Some package managers can return non-zero for benign states (already installed, partial update),
         # so verify command availability before declaring failure.
         if (-not $installed) {
-            Refresh-SessionPath
+            Update-SessionPath
             if (Get-Command $commandName -CommandType Application -ErrorAction SilentlyContinue) {
                 $installed = $true
                 if (-not $managerUsed) { $managerUsed = "detected" }
@@ -1205,7 +1220,7 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
         }
         $merged = @($byCommand.Values | Sort-Object Command)
         Write-OptionalToolState -Records $merged
-        Refresh-SessionPath
+        Update-SessionPath
     }
     return $newlyInstalled
 }
@@ -1316,7 +1331,7 @@ function Uninstall-TrackedOptionalTools {
 
     Write-OptionalToolState -Records $remaining
     if ($removedCount -gt 0) {
-        Refresh-SessionPath
+        Update-SessionPath
     }
     return $removedCount
 }
@@ -1343,7 +1358,7 @@ function Stop-ScriptTranscript {
     try { Stop-Transcript | Out-Null } catch {}
 }
 
-function Broadcast-EnvironmentChange {
+function Send-EnvironmentChange {
     try {
         Add-Type @"
 using System;
@@ -1357,12 +1372,12 @@ public class NativeMethods {
 "@ -ErrorAction SilentlyContinue
 
         $HWND_BROADCAST = [IntPtr]0xffff
-        $WM_SETTINGCHANGE = 0x1A
-        $result = [UIntPtr]::Zero
+        $WM_SETTINGCHANGE = [uint]0x1A
+        [UIntPtr]$result = [UIntPtr]::Zero
 
         [NativeMethods]::SendMessageTimeout(
             $HWND_BROADCAST, $WM_SETTINGCHANGE,
-            [UIntPtr]::Zero, "Environment", 2, 5000, [ref]$result
+            [UIntPtr]::Zero, "Environment", [uint]2, [uint]5000, [ref]$result
         ) | Out-Null
     }
     catch {
@@ -1370,7 +1385,7 @@ public class NativeMethods {
     }
 }
 
-function Refresh-SessionPath {
+function Update-SessionPath {
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
     [Environment]::GetEnvironmentVariable("Path", "User")
 }
@@ -1395,7 +1410,7 @@ function Backup-ProfileFile {
     return $backup
 }
 
-function Upsert-ProfileBlock {
+function Set-ProfileBlock {
     param(
         [Parameter(Mandatory = $true)][string]$ProfilePath,
         [Parameter(Mandatory = $true)][string]$StartMarker,
@@ -2464,7 +2479,7 @@ __UNIX_GENERIC_FALLBACK_BLOCK__
     $blockBody = $blockBody.Replace("__UNIX_GENERIC_FALLBACK_BLOCK__", $genericFallbackBlock)
 
     Remove-ProfileBlock -ProfilePath $profilePath -StartMarker $legacyStart -EndMarker $legacyEnd
-    Upsert-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody
+    Set-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody
     Write-Status -Type ok -Label "Profile blocks" -Detail "missing-shims updated -> $profilePath"
 }
 
@@ -3182,7 +3197,7 @@ Set-UnixCommand -Name "sleep" -Fallback {
 '@
 
     Remove-ProfileBlock -ProfilePath $profilePath -StartMarker $legacyStart -EndMarker $legacyEnd
-    Upsert-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody
+    Set-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody
     Write-Status -Type ok -Label "Profile blocks" -Detail "alias-compat updated -> $profilePath"
 }
 
@@ -3206,7 +3221,7 @@ if (Get-Command oh-my-posh -ErrorAction SilentlyContinue) {
 }
 "@
 
-    Upsert-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody
+    Set-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody
     Write-Status -Type ok -Label "Profile blocks" -Detail "terminal-setup updated -> $profilePath"
 }
 
@@ -3340,7 +3355,7 @@ if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
 }
 '@
 
-    Upsert-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody
+    Set-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody
     Write-Status -Type ok -Label "Profile blocks" -Detail "smart-shell updated -> $profilePath"
 }
 
@@ -3515,8 +3530,8 @@ try {
         }
 
         if ($didChange) {
-            Broadcast-EnvironmentChange
-            Refresh-SessionPath
+            Send-EnvironmentChange
+            Update-SessionPath
             Write-Status -Type ok -Label "Environment refreshed" -Detail "WM_SETTINGCHANGE broadcasted"
         }
         else {
@@ -3588,7 +3603,7 @@ try {
 
             $installedOptional = @(Install-MissingOptionalTools -Catalog $optionalToolCatalog)
             $installedOptionalModules = @(Install-MissingOptionalPowerShellModules -Catalog $optionalModuleCatalog)
-            Refresh-SessionPath
+            Update-SessionPath
 
             $presentAfter = @($optionalToolCatalog | Where-Object {
                     $_.Command -and (Get-Command ([string]$_.Command) -CommandType Application -ErrorAction SilentlyContinue)
@@ -3805,7 +3820,7 @@ try {
 
     Write-Section "Environment"
     if ($didChange) {
-        Broadcast-EnvironmentChange
+        Send-EnvironmentChange
         Write-Status -Type ok -Label "WM_SETTINGCHANGE" -Detail "broadcasted"
     }
     else {
@@ -3815,7 +3830,7 @@ try {
     # ======================== Verification ========================
 
     Write-Section "Verification"
-    Refresh-SessionPath
+    Update-SessionPath
 
     $verifyTools = @("grep", "sed", "awk", "find", "bash")
     $verifyCommandCache = @{}
