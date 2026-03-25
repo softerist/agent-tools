@@ -695,7 +695,7 @@ function Find-ToolInPath([string]$toolName, [string]$excludeDir = $null, [hashta
                 [System.IO.Path]::GetExtension($_.Source) -eq '.exe' -and
                 (-not $excludeDir -or -not $_.Source.StartsWith($excludeDir.Trim().TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase))
             } |
-            Sort-Object @{ Expression = { Get-ApplicationSourcePriority -Source $_.Source } }, @{ Expression = { $_.Source } } |
+            Sort-Object @{ Expression = { Get-ApplicationSourcePriority -Source $_.Source -Name $toolName } }, @{ Expression = { $_.Source } } |
             Select-Object -First 1
         if ($bestApp) { return $bestApp.Source }
     }
@@ -720,7 +720,7 @@ function Get-ApplicationCommandIndex([string]$excludeDir = $null) {
                 if ($src.StartsWith($normExclude, [StringComparison]::OrdinalIgnoreCase)) { continue }
             }
 
-            if (-not $index.ContainsKey($name) -or (Get-ApplicationSourcePriority -Source $src) -lt (Get-ApplicationSourcePriority -Source $index[$name])) {
+            if (-not $index.ContainsKey($name) -or (Get-ApplicationSourcePriority -Source $src -Name $name) -lt (Get-ApplicationSourcePriority -Source $index[$name] -Name $name)) {
                 $index[$name] = $src
             }
         }
@@ -729,18 +729,31 @@ function Get-ApplicationCommandIndex([string]$excludeDir = $null) {
     return $index
 }
 
+function Test-GitPreferredCoreCommand {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    return $Name -in @('ls', 'cp', 'mv', 'rm', 'cat', 'sort')
+}
+
 function Get-ApplicationSourcePriority {
-    param([Parameter(Mandatory = $true)][string]$Source)
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [string]$Name = ''
+    )
 
     if ([string]::IsNullOrWhiteSpace($Source)) {
         return 100
     }
 
+    $preferGit = -not [string]::IsNullOrWhiteSpace($Name) -and (Test-GitPreferredCoreCommand -Name $Name)
+
     if ($Source -match '(?i)uutils[.\-_]?coreutils') {
+        if ($preferGit) { return 10 }
         return 0
     }
 
     if ($Source -match '\\Git\\usr\\bin\\') {
+        if ($preferGit) { return 0 }
         return 10
     }
 
@@ -767,7 +780,7 @@ function Get-PreferredApplicationCommand {
                 [System.IO.Path]::GetExtension($_.Source) -eq '.exe' -and
                 (-not $ExcludeDir -or -not $_.Source.StartsWith($ExcludeDir.Trim().TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase))
             } |
-            Sort-Object @{ Expression = { Get-ApplicationSourcePriority -Source $_.Source } }, @{ Expression = { $_.Source } } |
+            Sort-Object @{ Expression = { Get-ApplicationSourcePriority -Source $_.Source -Name $Name } }, @{ Expression = { $_.Source } } |
             Select-Object -First 1
 
         return $bestApp
@@ -785,13 +798,65 @@ function Test-CoreUtilsLayerAvailable {
         if ([string]::IsNullOrWhiteSpace($command)) { continue }
         $apps = @(Get-Command $command -CommandType Application -All -ErrorAction SilentlyContinue)
         foreach ($app in $apps) {
-            if ((Get-ApplicationSourcePriority -Source $app.Source) -eq 0) {
+            if ((Get-ApplicationSourcePriority -Source $app.Source -Name $command) -eq 0) {
                 return $true
             }
         }
     }
 
     return $false
+}
+
+function Get-OptionalToolCommandName {
+    param([Parameter(Mandatory = $true)][object]$Tool)
+
+    if ($Tool.PSObject.Properties['Command']) {
+        return [string]$Tool.Command
+    }
+
+    return $null
+}
+
+function Get-OptionalToolDisplayName {
+    param([Parameter(Mandatory = $true)][object]$Tool)
+
+    $commandName = Get-OptionalToolCommandName -Tool $Tool
+    if (-not [string]::IsNullOrWhiteSpace($commandName)) {
+        return $commandName
+    }
+
+    if ($Tool.PSObject.Properties['PackageName'] -and -not [string]::IsNullOrWhiteSpace([string]$Tool.PackageName)) {
+        return [string]$Tool.PackageName
+    }
+
+    if ($Tool.PSObject.Properties['ModuleName'] -and -not [string]::IsNullOrWhiteSpace([string]$Tool.ModuleName)) {
+        return [string]$Tool.ModuleName
+    }
+
+    if ($Tool.PSObject.Properties['PackageId'] -and -not [string]::IsNullOrWhiteSpace([string]$Tool.PackageId)) {
+        return [string]$Tool.PackageId
+    }
+
+    return ''
+}
+
+function Test-OptionalToolAvailable {
+    param([Parameter(Mandatory = $true)][object]$Tool)
+
+    if ($Tool.PSObject.Properties['Kind'] -and [string]$Tool.Kind -eq 'Package') {
+        if ($Tool.PSObject.Properties['ProbeCommands'] -and $Tool.ProbeCommands) {
+            return Test-CoreUtilsLayerAvailable -ProbeCommands @($Tool.ProbeCommands)
+        }
+
+        return $false
+    }
+
+    $commandName = Get-OptionalToolCommandName -Tool $Tool
+    if ([string]::IsNullOrWhiteSpace($commandName)) {
+        return $false
+    }
+
+    return [bool](Get-PreferredApplicationCommand -Name $commandName)
 }
 
 function Get-OptionalToolCatalog {
@@ -865,18 +930,31 @@ if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
         $env:PATH = "$winGetLinks;$env:PATH"
     }
 
+    function global:Test-GitPreferredCoreCommand {
+        param([Parameter(Mandatory = $true)][string]$Name)
+
+        return $Name -in @('ls', 'cp', 'mv', 'rm', 'cat', 'sort')
+    }
+
     function global:Get-ApplicationSourcePriority {
-        param([Parameter(Mandatory = $true)][string]$Source)
+        param(
+            [Parameter(Mandatory = $true)][string]$Source,
+            [string]$Name = ''
+        )
 
         if ([string]::IsNullOrWhiteSpace($Source)) {
             return 100
         }
 
+        $preferGit = -not [string]::IsNullOrWhiteSpace($Name) -and (Test-GitPreferredCoreCommand -Name $Name)
+
         if ($Source -match '(?i)uutils[.\-_]?coreutils') {
+            if ($preferGit) { return 10 }
             return 0
         }
 
         if ($Source -match '\\Git\\usr\\bin\\') {
+            if ($preferGit) { return 0 }
             return 10
         }
 
@@ -903,7 +981,7 @@ if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
                     [System.IO.Path]::GetExtension($_.Source) -eq '.exe' -and
                     (-not $ExcludeDir -or -not $_.Source.StartsWith($ExcludeDir.Trim().TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase))
                 } |
-                Sort-Object @{ Expression = { Get-ApplicationSourcePriority -Source $_.Source } }, @{ Expression = { $_.Source } } |
+                Sort-Object @{ Expression = { Get-ApplicationSourcePriority -Source $_.Source -Name $Name } }, @{ Expression = { $_.Source } } |
                 Select-Object -First 1
 
             return $bestApp
@@ -1981,13 +2059,8 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
     if (-not $hasAnyPackageManager) {
         $missingCommands = @(
             $Catalog |
-            Where-Object {
-                ($_.Command -and -not (Get-Command ([string]$_.Command) -CommandType Application -ErrorAction SilentlyContinue)) -or
-                ($_.Kind -eq 'Package' -and $_.ProbeCommands -and -not (Test-CoreUtilsLayerAvailable -ProbeCommands @($_.ProbeCommands)))
-            } |
-            ForEach-Object {
-                if ($_.Command) { [string]$_.Command } else { [string]$_.PackageName }
-            }
+            Where-Object { -not (Test-OptionalToolAvailable -Tool $_) } |
+            ForEach-Object { Get-OptionalToolDisplayName -Tool $_ }
         )
 
         if ($missingCommands.Count -gt 0) {
@@ -1999,16 +2072,17 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
     }
 
     foreach ($tool in $Catalog) {
-        $commandName = [string]$tool.Command
-        if ($tool.Kind -eq 'Package') {
-            if ($tool.ProbeCommands -and (Test-CoreUtilsLayerAvailable -ProbeCommands @($tool.ProbeCommands))) {
+        $commandName = Get-OptionalToolCommandName -Tool $tool
+        $toolLabel = Get-OptionalToolDisplayName -Tool $tool
+        if ($tool.PSObject.Properties['Kind'] -and [string]$tool.Kind -eq 'Package') {
+            if (Test-OptionalToolAvailable -Tool $tool) {
                 continue
             }
         }
         elseif ([string]::IsNullOrWhiteSpace($commandName)) {
             continue
         }
-        elseif (Get-Command $commandName -CommandType Application -ErrorAction SilentlyContinue) {
+        elseif (Test-OptionalToolAvailable -Tool $tool) {
             continue
         }
 
@@ -2020,8 +2094,7 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
 
         if ($wingetAvailable -and $tool.WingetId) {
             $attempted += "winget"
-            $installLabel = if ($tool.Kind -eq 'Package' -and $tool.PackageName) { [string]$tool.PackageName } else { $commandName }
-            Write-Dim "Installing $installLabel via winget ($($tool.WingetId))..."
+            Write-Dim "Installing $toolLabel via winget ($($tool.WingetId))..."
             if ($script:DryRun) {
                 Write-DryRun "winget install --id $($tool.WingetId) ..."
                 $exitCode = 0
@@ -2039,8 +2112,7 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
 
         if (-not $installed -and $chocoAvailable -and $tool.ChocoId) {
             $attempted += "choco"
-            $installLabel = if ($tool.Kind -eq 'Package' -and $tool.PackageName) { [string]$tool.PackageName } else { $commandName }
-            Write-Dim "Installing $installLabel via choco ($($tool.ChocoId))..."
+            Write-Dim "Installing $toolLabel via choco ($($tool.ChocoId))..."
             if ($script:DryRun) {
                 Write-DryRun "choco install $($tool.ChocoId) -y"
                 $exitCode = 0
@@ -2058,14 +2130,7 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
 
         if (-not $installed) {
             Update-SessionPath
-            if ($tool.Kind -eq 'Package') {
-                if ($tool.ProbeCommands -and (Test-CoreUtilsLayerAvailable -ProbeCommands @($tool.ProbeCommands))) {
-                    $installed = $true
-                    if (-not $managerUsed) { $managerUsed = "detected" }
-                    if (-not $packageIdUsed) { $packageIdUsed = "n/a" }
-                }
-            }
-            elseif (Get-Command $commandName -CommandType Application -ErrorAction SilentlyContinue) {
+            if (Test-OptionalToolAvailable -Tool $tool) {
                 $installed = $true
                 if (-not $managerUsed) { $managerUsed = "detected" }
                 if (-not $packageIdUsed) { $packageIdUsed = "n/a" }
@@ -2074,16 +2139,18 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
 
         if ($installed) {
             $newlyInstalled += [pscustomobject]@{
+                Kind          = if ($tool.PSObject.Properties['Kind']) { [string]$tool.Kind } else { 'Command' }
                 Command       = $commandName
+                PackageName   = if ($tool.PSObject.Properties['PackageName']) { [string]$tool.PackageName } else { $null }
                 Manager       = $managerUsed
                 PackageId     = $packageIdUsed
                 InstalledAt   = (Get-Date).ToString("o")
                 ScriptVersion = $ScriptVersion
             }
-            Write-Status -Type ok -Label "Installed" -Detail "$commandName via $managerUsed" -Indent
+            Write-Status -Type ok -Label "Installed" -Detail "$toolLabel via $managerUsed" -Indent
         }
         else {
-            Write-Status -Type info -Label "Not installed" -Detail "$commandName" -Indent
+            Write-Status -Type info -Label "Not installed" -Detail $toolLabel -Indent
             if ($attempted.Count -gt 0) {
                 Write-Dim "Attempted via: $($attempted -join ', ')" -Indent
                 $exitDetails = @()
@@ -2101,16 +2168,28 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
 
     if ($newlyInstalled.Count -gt 0) {
         $existing = @(Read-OptionalToolState)
-        $byCommand = @{}
+        $byKey = @{}
         foreach ($item in $existing) {
-            $cmd = [string]$item.Command
-            if (-not [string]::IsNullOrWhiteSpace($cmd)) { $byCommand[$cmd] = $item }
+            $key = if ($item.PSObject.Properties['Kind'] -and [string]$item.Kind -eq 'Package') {
+                "package::{0}" -f (Get-OptionalToolDisplayName -Tool $item)
+            }
+            else {
+                $cmd = Get-OptionalToolCommandName -Tool $item
+                if ([string]::IsNullOrWhiteSpace($cmd)) { $null } else { "command::{0}" -f $cmd }
+            }
+            if (-not [string]::IsNullOrWhiteSpace($key)) { $byKey[$key] = $item }
         }
         foreach ($item in $newlyInstalled) {
-            $cmd = [string]$item.Command
-            if (-not [string]::IsNullOrWhiteSpace($cmd)) { $byCommand[$cmd] = $item }
+            $key = if ($item.PSObject.Properties['Kind'] -and [string]$item.Kind -eq 'Package') {
+                "package::{0}" -f (Get-OptionalToolDisplayName -Tool $item)
+            }
+            else {
+                $cmd = Get-OptionalToolCommandName -Tool $item
+                if ([string]::IsNullOrWhiteSpace($cmd)) { $null } else { "command::{0}" -f $cmd }
+            }
+            if (-not [string]::IsNullOrWhiteSpace($key)) { $byKey[$key] = $item }
         }
-        $merged = @($byCommand.Values | Sort-Object Command)
+        $merged = @($byKey.Values | Sort-Object @{ Expression = { Get-OptionalToolDisplayName -Tool $_ } })
         Write-OptionalToolState -Records $merged
         Update-SessionPath
     }
@@ -2125,7 +2204,8 @@ function Uninstall-TrackedOptionalTools {
     $remaining = @()
     foreach ($item in $tracked) {
         $kind = if ($item.PSObject.Properties["Kind"]) { [string]$item.Kind } else { "" }
-        $commandName = [string]$item.Command
+        $commandName = Get-OptionalToolCommandName -Tool $item
+        $toolLabel = Get-OptionalToolDisplayName -Tool $item
         $moduleName = if ($item.PSObject.Properties["ModuleName"]) { [string]$item.ModuleName } else { "" }
         $manager = [string]$item.Manager
         $packageId = [string]$item.PackageId
@@ -2181,7 +2261,7 @@ function Uninstall-TrackedOptionalTools {
                 if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
                     break
                 }
-                Write-Host "  [INFO] Uninstalling optional tool: $commandName via winget ($packageId)..." -ForegroundColor DarkGray
+                Write-Host "  [INFO] Uninstalling optional tool: $toolLabel via winget ($packageId)..." -ForegroundColor DarkGray
                 if ($script:DryRun) {
                     Write-Host "[DRYRUN] winget uninstall --id $packageId ..." -ForegroundColor DarkGray
                     $exitCode = 0
@@ -2196,7 +2276,7 @@ function Uninstall-TrackedOptionalTools {
                 if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
                     break
                 }
-                Write-Host "  [INFO] Uninstalling optional tool: $commandName via choco ($packageId)..." -ForegroundColor DarkGray
+                Write-Host "  [INFO] Uninstalling optional tool: $toolLabel via choco ($packageId)..." -ForegroundColor DarkGray
                 if ($script:DryRun) {
                     Write-Host "[DRYRUN] choco uninstall $packageId -y" -ForegroundColor DarkGray
                     $exitCode = 0
@@ -2214,7 +2294,7 @@ function Uninstall-TrackedOptionalTools {
 
         if ($ok) {
             $removedCount++
-            Write-Host "  [OK] Removed optional tool: $commandName" -ForegroundColor Green
+            Write-Host "  [OK] Removed optional tool: $toolLabel" -ForegroundColor Green
         }
         else {
             $remaining += $item
@@ -2510,6 +2590,45 @@ function Install-ProfileMissingShims {
 $script:__UnixExeCache = @{}
 $script:__UnixExeMissing = New-Object object
 
+if (-not (Get-Command Test-GitPreferredCoreCommand -CommandType Function -ErrorAction SilentlyContinue)) {
+    function Test-GitPreferredCoreCommand {
+        param([Parameter(Mandatory = $true)][string]$Name)
+
+        return $Name -in @('ls', 'cp', 'mv', 'rm', 'cat', 'sort')
+    }
+}
+
+if (-not (Get-Command Get-UnixShimSourcePriority -CommandType Function -ErrorAction SilentlyContinue)) {
+    function Get-UnixShimSourcePriority {
+        param(
+            [Parameter(Mandatory = $true)][string]$Source,
+            [string]$Name = ''
+        )
+
+        if ([string]::IsNullOrWhiteSpace($Source)) {
+            return 100
+        }
+
+        $preferGit = -not [string]::IsNullOrWhiteSpace($Name) -and (Test-GitPreferredCoreCommand -Name $Name)
+
+        if ($Source -match '(?i)uutils[.\-_]?coreutils') {
+            if ($preferGit) { return 10 }
+            return 0
+        }
+
+        if ($Source -match '\\Git\\usr\\bin\\') {
+            if ($preferGit) { return 0 }
+            return 10
+        }
+
+        if ($Source -match '\\Git\\shims\\') {
+            return 30
+        }
+
+        return 5
+    }
+}
+
 function Get-UnixShimExecutable {
     param([Parameter(Mandatory = $true)][string]$Name)
     $key = $Name.ToLowerInvariant()
@@ -2521,15 +2640,13 @@ function Get-UnixShimExecutable {
 
     $candidates = @(Get-Command $Name -CommandType Application -All -ErrorAction SilentlyContinue)
     $app = $candidates |
-        Where-Object { $_.Source -match '\.exe$' -and $_.Source -notmatch '\\Git\\shims\\' } |
+        Where-Object { $_.Source -and [System.IO.Path]::GetExtension($_.Source) -eq '.exe' } |
+        Sort-Object @{ Expression = { Get-UnixShimSourcePriority -Source $_.Source -Name $Name } }, @{ Expression = { $_.Source } } |
         Select-Object -First 1
     if (-not $app) {
         $app = $candidates |
-            Where-Object { $_.Source -match '\.exe$' } |
+            Sort-Object @{ Expression = { Get-UnixShimSourcePriority -Source $_.Source -Name $Name } }, @{ Expression = { $_.Source } } |
             Select-Object -First 1
-    }
-    if (-not $app) {
-        $app = $candidates | Select-Object -First 1
     }
     if ($app) {
         $script:__UnixExeCache[$key] = $app
@@ -3399,6 +3516,43 @@ function Install-ProfileAliasCompat {
 if (-not (Get-Command Get-UnixShimExecutable -CommandType Function -ErrorAction SilentlyContinue)) {
     $script:__UnixExeCache = @{}
     $script:__UnixExeMissing = New-Object object
+    if (-not (Get-Command Test-GitPreferredCoreCommand -CommandType Function -ErrorAction SilentlyContinue)) {
+        function Test-GitPreferredCoreCommand {
+            param([Parameter(Mandatory = $true)][string]$Name)
+
+            return $Name -in @('ls', 'cp', 'mv', 'rm', 'cat', 'sort')
+        }
+    }
+    if (-not (Get-Command Get-UnixShimSourcePriority -CommandType Function -ErrorAction SilentlyContinue)) {
+        function Get-UnixShimSourcePriority {
+            param(
+                [Parameter(Mandatory = $true)][string]$Source,
+                [string]$Name = ''
+            )
+
+            if ([string]::IsNullOrWhiteSpace($Source)) {
+                return 100
+            }
+
+            $preferGit = -not [string]::IsNullOrWhiteSpace($Name) -and (Test-GitPreferredCoreCommand -Name $Name)
+
+            if ($Source -match '(?i)uutils[.\-_]?coreutils') {
+                if ($preferGit) { return 10 }
+                return 0
+            }
+
+            if ($Source -match '\\Git\\usr\\bin\\') {
+                if ($preferGit) { return 0 }
+                return 10
+            }
+
+            if ($Source -match '\\Git\\shims\\') {
+                return 30
+            }
+
+            return 5
+        }
+    }
     function Get-UnixShimExecutable {
         param([Parameter(Mandatory = $true)][string]$Name)
         $key = $Name.ToLowerInvariant()
@@ -3409,15 +3563,13 @@ if (-not (Get-Command Get-UnixShimExecutable -CommandType Function -ErrorAction 
         }
         $candidates = @(Get-Command $Name -CommandType Application -All -ErrorAction SilentlyContinue)
         $app = $candidates |
-            Where-Object { $_.Source -match '\.exe$' -and $_.Source -notmatch '\\Git\\shims\\' } |
+            Where-Object { $_.Source -and [System.IO.Path]::GetExtension($_.Source) -eq '.exe' } |
+            Sort-Object @{ Expression = { Get-UnixShimSourcePriority -Source $_.Source -Name $Name } }, @{ Expression = { $_.Source } } |
             Select-Object -First 1
         if (-not $app) {
             $app = $candidates |
-                Where-Object { $_.Source -match '\.exe$' } |
+                Sort-Object @{ Expression = { Get-UnixShimSourcePriority -Source $_.Source -Name $Name } }, @{ Expression = { $_.Source } } |
                 Select-Object -First 1
-        }
-        if (-not $app) {
-            $app = $candidates | Select-Object -First 1
         }
         if ($app) {
             $script:__UnixExeCache[$key] = $app
@@ -4415,8 +4567,8 @@ try {
         Write-Section "Optional Tools"
         if ($PSCmdlet.ShouldProcess("Optional tools", "Install missing optional tools via package managers")) {
             $presentBefore = @($optionalToolCatalog | Where-Object {
-                    $_.Command -and (Get-Command ([string]$_.Command) -CommandType Application -ErrorAction SilentlyContinue)
-                } | ForEach-Object { [string]$_.Command })
+                    Test-OptionalToolAvailable -Tool $_
+                } | ForEach-Object { Get-OptionalToolDisplayName -Tool $_ })
             $presentModulesBefore = @($optionalModuleCatalog | Where-Object {
                     $_.ModuleName -and (Get-Module -ListAvailable ([string]$_.ModuleName))
                 } | ForEach-Object { [string]$_.ModuleName })
@@ -4426,11 +4578,11 @@ try {
             Update-SessionPath
 
             $presentAfter = @($optionalToolCatalog | Where-Object {
-                    $_.Command -and (Get-Command ([string]$_.Command) -CommandType Application -ErrorAction SilentlyContinue)
-                } | ForEach-Object { [string]$_.Command })
+                    Test-OptionalToolAvailable -Tool $_
+                } | ForEach-Object { Get-OptionalToolDisplayName -Tool $_ })
             $missingAfter = @($optionalToolCatalog | Where-Object {
-                    $_.Command -and -not (Get-Command ([string]$_.Command) -CommandType Application -ErrorAction SilentlyContinue)
-                } | ForEach-Object { [string]$_.Command })
+                    -not (Test-OptionalToolAvailable -Tool $_)
+                } | ForEach-Object { Get-OptionalToolDisplayName -Tool $_ })
             $newlyDetected = @($presentAfter | Where-Object { $_ -notin $presentBefore })
             $alreadyPresent = @($presentBefore | Sort-Object -Unique)
             $presentAfter = @($presentAfter | Sort-Object -Unique)
@@ -4510,7 +4662,11 @@ try {
             }
 
             $toolsToShim = Get-CoreShimToolCatalog
-            $externalTools = @($optionalToolCatalog | ForEach-Object { $_.Command })
+            $externalTools = @(
+                $optionalToolCatalog |
+                ForEach-Object { Get-OptionalToolCommandName -Tool $_ } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            )
             $searchDirs = @($gitUsrBin)
             if ($AddMingw -and (Test-Path $gitMingwBin)) { $searchDirs += $gitMingwBin }
             $appIndex = Get-ApplicationCommandIndex -excludeDir $shimDir

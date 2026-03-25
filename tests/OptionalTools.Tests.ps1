@@ -4,8 +4,11 @@ $scriptPath = Join-Path $repoRoot 'Enable-UnixTools.ps1'
 
 Import-ScriptFunctions -ScriptPath $scriptPath -Names @(
     'Get-OptionalToolCatalog',
+    'Test-GitPreferredCoreCommand',
     'Get-ApplicationSourcePriority',
-    'Get-PreferredApplicationCommand'
+    'Get-PreferredApplicationCommand',
+    'Get-OptionalToolCommandName',
+    'Get-OptionalToolDisplayName'
 )
 
 Describe 'Optional tool catalog' {
@@ -18,13 +21,22 @@ Describe 'Optional tool catalog' {
         ($coreutils -ne $null) | Should Be $true
         ($coreutils.ProbeCommands -ne $null) | Should Be $true
         ($coreutils.ProbeCommands -contains 'ls') | Should Be $true
+        ([string]::IsNullOrWhiteSpace((Get-OptionalToolCommandName -Tool $coreutils))) | Should Be $true
+        ((Get-OptionalToolDisplayName -Tool $coreutils) -eq 'coreutils') | Should Be $true
     }
 
-    It 'prefers coreutils application sources over Git paths' {
+    It 'prefers coreutils application sources over Git paths for non-sensitive commands' {
+        $coreutilsPath = 'C:\Users\demo\AppData\Local\Microsoft\WinGet\Packages\uutils.coreutils_123\head.exe'
+        $gitPath = 'C:\Program Files\Git\usr\bin\head.exe'
+
+        ((Get-ApplicationSourcePriority -Source $coreutilsPath -Name 'head') -lt (Get-ApplicationSourcePriority -Source $gitPath -Name 'head')) | Should Be $true
+    }
+
+    It 'prefers Git application sources over coreutils for GNU-sensitive core commands' {
         $coreutilsPath = 'C:\Users\demo\AppData\Local\Microsoft\WinGet\Packages\uutils.coreutils_123\ls.exe'
         $gitPath = 'C:\Program Files\Git\usr\bin\ls.exe'
 
-        ((Get-ApplicationSourcePriority -Source $coreutilsPath) -lt (Get-ApplicationSourcePriority -Source $gitPath)) | Should Be $true
+        ((Get-ApplicationSourcePriority -Source $gitPath -Name 'ls') -lt (Get-ApplicationSourcePriority -Source $coreutilsPath -Name 'ls')) | Should Be $true
     }
 
     It 'prefers a real exe over a same-named cmd wrapper' {

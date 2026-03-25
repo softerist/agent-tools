@@ -12,11 +12,14 @@ Import-ScriptFunctions -ScriptPath $scriptPath -Names @(
 )
 
 Describe 'Generated profile blocks' {
-    It 'prefers real executables over Git shim cmd wrappers in generated profile shims' {
+    It 'uses command-aware executable priority in generated profile shims' {
         $scriptText = Get-Content -Raw -Path $scriptPath
 
         ([regex]::Matches($scriptText, [regex]::Escape("Get-Command `$Name -CommandType Application -All -ErrorAction SilentlyContinue")).Count -ge 2) | Should Be $true
-        ([regex]::Matches($scriptText, [regex]::Escape("Where-Object { `$_.Source -match '\.exe$' -and `$_.Source -notmatch '\\Git\\shims\\' }")).Count -ge 2) | Should Be $true
+        ([regex]::Matches($scriptText, [regex]::Escape("function Get-UnixShimSourcePriority {")).Count -ge 2) | Should Be $true
+        ([regex]::Matches($scriptText, [regex]::Escape("Sort-Object @{ Expression = { Get-UnixShimSourcePriority -Source `$_.Source -Name `$Name } }, @{ Expression = { `$_.Source } }")).Count -ge 2) | Should Be $true
+        ([regex]::Matches($scriptText, [regex]::Escape("Where-Object { `$_.Source -and [System.IO.Path]::GetExtension(`$_.Source) -eq '.exe' }")).Count -ge 2) | Should Be $true
+        ([regex]::Matches($scriptText, [regex]::Escape("Where-Object { `$_.Source -match '\.exe$' -and `$_.Source -notmatch '\\Git\\shims\\' }")).Count) | Should Be 0
     }
 
     It 'suppresses optional module import noise in the smart-shell block' {
