@@ -1,4 +1,4 @@
-$repoRoot = Split-Path $PSScriptRoot -Parent
+﻿$repoRoot = Split-Path $PSScriptRoot -Parent
 $scriptPath = Join-Path $repoRoot 'Enable-UnixTools.ps1'
 . (Join-Path $PSScriptRoot 'Support\TestHelpers.ps1')
 
@@ -98,7 +98,7 @@ Describe 'Generated profile blocks' {
           "options": {
             "style": "folder"
           },
-          "template": " {{ .Path }}"
+          "template": "î—¿ {{ .Path }}"
         }
       ]
     },
@@ -122,6 +122,8 @@ Describe 'Generated profile blocks' {
             $pathSegment.options.style | Should Be 'agnoster_short'
             ([int][char]$pathSegment.options.home_icon) | Should Be 0xF015
             $pathSegment.template | Should Be ' {{ .Path }} '
+            ($pathSegment.options.folder_separator_icon -match '#F4F1DE') | Should Be $true
+            ($pathSegment.options.folder_separator_icon -match '#7DD3FC') | Should Be $false
             (@($theme.blocks | Select-Object -ExpandProperty type) -contains 'rprompt') | Should Be $false
         }
         finally {
@@ -129,3 +131,5 @@ Describe 'Generated profile blocks' {
         }
     }
 }
+
+

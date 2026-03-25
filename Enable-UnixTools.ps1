@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Adds Unix-compatible tools (grep, sed, awk, etc.) to the Windows system PATH.
@@ -205,19 +205,19 @@ catch {
 # Icon/box-drawing character sets.
 if ($script:UseUnicode) {
     $script:UI = @{
-        Ok     = [string][char]0x2713  # ✓
-        Fail   = [string][char]0x2717  # ✗
-        Info   = [string][char]0x25CF  # ●
-        Detail = [string][char]0x25C6  # ◆
-        Warn   = [string][char]0x26A0  # ⚠
-        Skip   = [string][char]0x25CB  # ○
-        Arrow  = [string][char]0x2192  # →
-        HLine  = [string][char]0x2500  # ─
-        TL     = [string][char]0x256D  # ╭
-        TR     = [string][char]0x256E  # ╮
-        BL     = [string][char]0x2570  # ╰
-        BR     = [string][char]0x256F  # ╯
-        VLine  = [string][char]0x2502  # │
+        Ok     = [string][char]0x2713  # âœ“
+        Fail   = [string][char]0x2717  # âœ—
+        Info   = [string][char]0x25CF  # â—
+        Detail = [string][char]0x25C6  # â—†
+        Warn   = [string][char]0x26A0  # âš 
+        Skip   = [string][char]0x25CB  # â—‹
+        Arrow  = [string][char]0x2192  # â†’
+        HLine  = [string][char]0x2500  # â”€
+        TL     = [string][char]0x256D  # â•­
+        TR     = [string][char]0x256E  # â•®
+        BL     = [string][char]0x2570  # â•°
+        BR     = [string][char]0x256F  # â•¯
+        VLine  = [string][char]0x2502  # â”‚
     }
 }
 else {
@@ -1431,7 +1431,7 @@ function Update-ManagedOhMyPoshThemes {
         $pathSegment = $promptBlock.segments | Where-Object { $_.type -eq 'path' } | Select-Object -First 1
         if ($pathSegment) {
             $folderIcon = '<#A7F3D0>{0} </>' -f ([char]0xF07B)
-            $folderSeparatorIcon = ' <#7DD3FC>{0}</> ' -f ([char]0xE0B1)
+            $folderSeparatorIcon = ' <#F4F1DE>{0}</> ' -f ([char]0xE0B1)
             $homeIcon = [string]([char]0xF015)
             $pathSegment.foreground = '#F4F1DE'
             $pathSegment.options = [pscustomobject]@{
@@ -4592,3 +4592,6 @@ finally {
         Stop-ScriptTranscript
     }
 }
+
+
+
