@@ -1446,7 +1446,10 @@ function Update-ManagedOhMyPoshThemes {
     }
 
     if ($rpromptBlock) {
-        $rpromptBlock.segments = @($rpromptBlock.segments | Where-Object { $_.type -notin @('executiontime', 'sysinfo', 'time') })
+        $rpromptBlock.segments = @($rpromptBlock.segments | Where-Object { $_.type -notin @('executiontime', 'sysinfo', 'battery', 'time') })
+        if (@($rpromptBlock.segments).Count -eq 0) {
+            $themeJson.blocks = @($themeJson.blocks | Where-Object { $_.type -ne 'rprompt' })
+        }
     }
 
     $themeJson | ConvertTo-Json -Depth 100 | Set-Content -Path $lightgreenThemePath -Encoding UTF8

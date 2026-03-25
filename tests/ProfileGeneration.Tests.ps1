@@ -122,7 +122,7 @@ Describe 'Generated profile blocks' {
             $pathSegment.options.style | Should Be 'agnoster_short'
             ([int][char]$pathSegment.options.home_icon) | Should Be 0xF015
             $pathSegment.template | Should Be ' {{ .Path }} '
-            ((@($theme.blocks[1].segments | Select-Object -ExpandProperty type)) -join ',') | Should Be 'battery'
+            (@($theme.blocks | Select-Object -ExpandProperty type) -contains 'rprompt') | Should Be $false
         }
         finally {
             Remove-Item -Path $themesDir -Recurse -Force -ErrorAction SilentlyContinue
