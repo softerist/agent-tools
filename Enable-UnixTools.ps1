@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Adds Unix-compatible tools (grep, sed, awk, etc.) to the Windows system PATH.
@@ -690,13 +690,13 @@ function Find-ToolInPath([string]$toolName, [string]$excludeDir = $null, [hashta
         if (-not $apps) { return $null }
 
         $bestApp = $apps |
-            Where-Object {
-                $_.Source -and
-                [System.IO.Path]::GetExtension($_.Source) -eq '.exe' -and
-                (-not $excludeDir -or -not $_.Source.StartsWith($excludeDir.Trim().TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase))
-            } |
-            Sort-Object @{ Expression = { Get-ApplicationSourcePriority -Source $_.Source -Name $toolName } }, @{ Expression = { $_.Source } } |
-            Select-Object -First 1
+        Where-Object {
+            $_.Source -and
+            [System.IO.Path]::GetExtension($_.Source) -eq '.exe' -and
+            (-not $excludeDir -or -not $_.Source.StartsWith($excludeDir.Trim().TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase))
+        } |
+        Sort-Object @{ Expression = { Get-ApplicationSourcePriority -Source $_.Source -Name $toolName } }, @{ Expression = { $_.Source } } |
+        Select-Object -First 1
         if ($bestApp) { return $bestApp.Source }
     }
     catch { Write-Verbose "Ignored error in Find-ToolInPath: $($_.Exception.Message)" }
@@ -775,13 +775,13 @@ function Get-PreferredApplicationCommand {
         if (-not $apps) { return $null }
 
         $bestApp = $apps |
-            Where-Object {
-                $_.Source -and
-                [System.IO.Path]::GetExtension($_.Source) -eq '.exe' -and
-                (-not $ExcludeDir -or -not $_.Source.StartsWith($ExcludeDir.Trim().TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase))
-            } |
-            Sort-Object @{ Expression = { Get-ApplicationSourcePriority -Source $_.Source -Name $Name } }, @{ Expression = { $_.Source } } |
-            Select-Object -First 1
+        Where-Object {
+            $_.Source -and
+            [System.IO.Path]::GetExtension($_.Source) -eq '.exe' -and
+            (-not $ExcludeDir -or -not $_.Source.StartsWith($ExcludeDir.Trim().TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase))
+        } |
+        Sort-Object @{ Expression = { Get-ApplicationSourcePriority -Source $_.Source -Name $Name } }, @{ Expression = { $_.Source } } |
+        Select-Object -First 1
 
         return $bestApp
     }
@@ -1166,7 +1166,7 @@ function Resolve-ProfilePromptTheme {
     $configPath = Join-Path $ThemesDir ("{0}.omp.json" -f $effectiveTheme)
     if (Test-Path -LiteralPath $configPath -PathType Leaf) {
         return [pscustomobject]@{
-            Theme = $effectiveTheme
+            Theme      = $effectiveTheme
             ConfigPath = $configPath
         }
     }
@@ -1175,14 +1175,14 @@ function Resolve-ProfilePromptTheme {
         $fallbackPath = Join-Path $ThemesDir ("{0}.omp.json" -f $fallbackTheme)
         if (Test-Path -LiteralPath $fallbackPath -PathType Leaf) {
             return [pscustomobject]@{
-                Theme = $fallbackTheme
+                Theme      = $fallbackTheme
                 ConfigPath = $fallbackPath
             }
         }
     }
 
     return [pscustomobject]@{
-        Theme = $effectiveTheme
+        Theme      = $effectiveTheme
         ConfigPath = $configPath
     }
 }
@@ -1200,7 +1200,7 @@ function Get-ProfilePromptBlockBody {
 
     $themeInfo = Resolve-ProfilePromptTheme -ThemesDir $ThemesDir -Theme $Theme
     $configPath = $themeInfo.ConfigPath
-if ($PromptInitMode -eq 'Eager') {
+    if ($PromptInitMode -eq 'Eager') {
         $blockBody = @'
 # Oh My Posh theme configuration
 # Prompt init mode: Eager
@@ -1635,11 +1635,11 @@ function Update-ManagedOhMyPoshThemes {
             $homeIcon = [string]([char]0xF015)
             $pathSegment.foreground = '#F4F1DE'
             $pathSegment.options = [pscustomobject]@{
-                style = 'agnoster_short'
-                max_depth = 4
-                folder_icon = $folderIcon
+                style                 = 'agnoster_short'
+                max_depth             = 4
+                folder_icon           = $folderIcon
                 folder_separator_icon = $folderSeparatorIcon
-                home_icon = $homeIcon
+                home_icon             = $homeIcon
             }
             $pathSegment.template = ' {{ .Path }} '
         }
@@ -1847,7 +1847,8 @@ function Set-TerminalFonts {
                 if ($content -match '"defaults"\s*:\s*\{\s*\}') {
                     $content = $content -replace '"defaults"\s*:\s*\{\s*\}', '"defaults": { "font": { "face": "CaskaydiaCove NF" } }'
                     Set-Content -Path $wtSettings -Value $content -Encoding UTF8
-                } elseif ($content -match '"defaults"\s*:\s*\{') {
+                }
+                elseif ($content -match '"defaults"\s*:\s*\{') {
                     $content = $content -replace '("defaults"\s*:\s*\{)(\s*"[^"]+")', ('$1' + "`n            `"font`": { `"face`": `"CaskaydiaCove NF`" }," + '$2')
                     Set-Content -Path $wtSettings -Value $content -Encoding UTF8
                 }
@@ -4886,6 +4887,14 @@ try {
     Write-Host ""
 
 }
+finally {
+    if ($transcriptStarted) {
+        Stop-ScriptTranscript
+    }
+}
+
+
+
 finally {
     if ($transcriptStarted) {
         Stop-ScriptTranscript

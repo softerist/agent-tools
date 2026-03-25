@@ -1,0 +1,30 @@
+[
+  {
+    "ModuleName": "CompletionPredictor",
+    "Repository": "PSGallery"
+  },
+  {
+    "ModuleName": "Microsoft.WinGet.CommandNotFound",
+    "Repository": "PSGallery"
+  },
+  {
+    "ModuleName": "PSFzf",
+    "Repository": "PSGallery"
+  },
+  {
+    "ModuleName": "ZLocation",
+    "Repository": "PSGallery"
+  },
+  {
+    "ModuleName": "posh-git",
+    "Repository": "PSGallery"
+  },
+  {
+    "ModuleName": "Terminal-Icons",
+    "Repository": "PSGallery"
+  },
+  {
+    "ModuleName": "powershell-yaml",
+    "Repository": "PSGallery"
+  }
+]

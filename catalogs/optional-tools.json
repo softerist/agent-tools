@@ -1,0 +1,95 @@
+[
+  {
+    "Kind": "Package",
+    "PackageName": "coreutils",
+    "ProbeCommands": [
+      "ls",
+      "cp",
+      "mv",
+      "rm",
+      "cat"
+    ],
+    "WingetId": "uutils.coreutils",
+    "ChocoId": "coreutils"
+  },
+  {
+    "Command": "rg",
+    "WingetId": "BurntSushi.ripgrep.MSVC",
+    "ChocoId": "ripgrep"
+  },
+  {
+    "Command": "fd",
+    "WingetId": "sharkdp.fd",
+    "ChocoId": "fd"
+  },
+  {
+    "Command": "jq",
+    "WingetId": "jqlang.jq",
+    "ChocoId": "jq"
+  },
+  {
+    "Command": "yq",
+    "WingetId": "MikeFarah.yq",
+    "ChocoId": "yq"
+  },
+  {
+    "Command": "bat",
+    "WingetId": "sharkdp.bat",
+    "ChocoId": "bat"
+  },
+  {
+    "Command": "eza",
+    "WingetId": "eza-community.eza",
+    "ChocoId": "eza"
+  },
+  {
+    "Command": "fzf",
+    "WingetId": "junegunn.fzf",
+    "ChocoId": "fzf"
+  },
+  {
+    "Command": "ag",
+    "WingetId": "JFLarvoire.Ag",
+    "ChocoId": "ag"
+  },
+  {
+    "Command": "zoxide",
+    "WingetId": "ajeetdsouza.zoxide",
+    "ChocoId": "zoxide"
+  },
+  {
+    "Command": "delta",
+    "WingetId": "dandavison.delta",
+    "ChocoId": "delta"
+  },
+  {
+    "Command": "gh",
+    "WingetId": "GitHub.cli",
+    "ChocoId": "gh"
+  },
+  {
+    "Command": "lazygit",
+    "WingetId": "JesseDuffield.lazygit",
+    "ChocoId": "lazygit"
+  },
+  {
+    "Command": "yazi",
+    "WingetId": "sxyazi.yazi",
+    "ChocoId": "yazi"
+  },
+  {
+    "Command": "dust",
+    "WingetId": "bootandy.dust",
+    "ChocoId": "du-dust"
+  },
+  {
+    "Command": "procs",
+    "WingetId": "dalance.procs",
+    "ChocoId": "procs"
+  },
+  {
+    "Command": "oh-my-posh",
+    "WingetId": "JanDeDobbeleer.OhMyPosh",
+    "ChocoId": "oh-my-posh"
+  }
+]
