@@ -689,16 +689,15 @@ function Find-ToolInPath([string]$toolName, [string]$excludeDir = $null, [hashta
         $apps = Get-Command $toolName -CommandType Application -All -ErrorAction SilentlyContinue
         if (-not $apps) { return $null }
 
-        foreach ($app in $apps) {
-            $src = $app.Source
-            if (-not $src) { continue }
-            if ([System.IO.Path]::GetExtension($src) -ne ".exe") { continue }
-            if ($excludeDir) {
-                $normExclude = $excludeDir.Trim().TrimEnd('\')
-                if ($src.StartsWith($normExclude, [StringComparison]::OrdinalIgnoreCase)) { continue }
-            }
-            return $src
-        }
+        $bestApp = $apps |
+            Where-Object {
+                $_.Source -and
+                [System.IO.Path]::GetExtension($_.Source) -eq '.exe' -and
+                (-not $excludeDir -or -not $_.Source.StartsWith($excludeDir.Trim().TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase))
+            } |
+            Sort-Object @{ Expression = { Get-ApplicationSourcePriority -Source $_.Source } }, @{ Expression = { $_.Source } } |
+            Select-Object -First 1
+        if ($bestApp) { return $bestApp.Source }
     }
     catch { Write-Verbose "Ignored error in Find-ToolInPath: $($_.Exception.Message)" }
     return $null
@@ -711,7 +710,6 @@ function Get-ApplicationCommandIndex([string]$excludeDir = $null) {
         foreach ($app in $apps) {
             $name = [System.IO.Path]::GetFileNameWithoutExtension($app.Name)
             if ([string]::IsNullOrWhiteSpace($name)) { continue }
-            if ($index.ContainsKey($name)) { continue }
 
             $src = $app.Source
             if ([string]::IsNullOrWhiteSpace($src)) { continue }
@@ -721,15 +719,90 @@ function Get-ApplicationCommandIndex([string]$excludeDir = $null) {
                 $normExclude = $excludeDir.Trim().TrimEnd('\')
                 if ($src.StartsWith($normExclude, [StringComparison]::OrdinalIgnoreCase)) { continue }
             }
-            $index[$name] = $src
+
+            if (-not $index.ContainsKey($name) -or (Get-ApplicationSourcePriority -Source $src) -lt (Get-ApplicationSourcePriority -Source $index[$name])) {
+                $index[$name] = $src
+            }
         }
     }
     catch { Write-Verbose "Ignored error in Get-ApplicationCommandIndex: $($_.Exception.Message)" }
     return $index
 }
 
+function Get-ApplicationSourcePriority {
+    param([Parameter(Mandatory = $true)][string]$Source)
+
+    if ([string]::IsNullOrWhiteSpace($Source)) {
+        return 100
+    }
+
+    if ($Source -match '(?i)uutils[.\-_]?coreutils') {
+        return 0
+    }
+
+    if ($Source -match '\\Git\\usr\\bin\\') {
+        return 10
+    }
+
+    if ($Source -match '\\Git\\shims\\') {
+        return 30
+    }
+
+    return 5
+}
+
+function Get-PreferredApplicationCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [string]$ExcludeDir = $null
+    )
+
+    try {
+        $apps = @(Get-Command $Name -CommandType Application -All -ErrorAction SilentlyContinue)
+        if (-not $apps) { return $null }
+
+        $bestApp = $apps |
+            Where-Object {
+                $_.Source -and
+                [System.IO.Path]::GetExtension($_.Source) -eq '.exe' -and
+                (-not $ExcludeDir -or -not $_.Source.StartsWith($ExcludeDir.Trim().TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase))
+            } |
+            Sort-Object @{ Expression = { Get-ApplicationSourcePriority -Source $_.Source } }, @{ Expression = { $_.Source } } |
+            Select-Object -First 1
+
+        return $bestApp
+    }
+    catch {
+        Write-Verbose "Ignored error in Get-PreferredApplicationCommand: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Test-CoreUtilsLayerAvailable {
+    param([string[]]$ProbeCommands)
+
+    foreach ($command in @($ProbeCommands)) {
+        if ([string]::IsNullOrWhiteSpace($command)) { continue }
+        $apps = @(Get-Command $command -CommandType Application -All -ErrorAction SilentlyContinue)
+        foreach ($app in $apps) {
+            if ((Get-ApplicationSourcePriority -Source $app.Source) -eq 0) {
+                return $true
+            }
+        }
+    }
+
+    return $false
+}
+
 function Get-OptionalToolCatalog {
     return @(
+        [pscustomobject]@{
+            Kind          = "Package"
+            PackageName   = "coreutils"
+            ProbeCommands = @("ls", "cp", "mv", "rm", "cat")
+            WingetId      = "uutils.coreutils"
+            ChocoId       = "coreutils"
+        },
         [pscustomobject]@{ Command = "rg"; WingetId = "BurntSushi.ripgrep.MSVC"; ChocoId = "ripgrep" },
         [pscustomobject]@{ Command = "fd"; WingetId = "sharkdp.fd"; ChocoId = "fd" },
         [pscustomobject]@{ Command = "jq"; WingetId = "jqlang.jq"; ChocoId = "jq" },
@@ -792,6 +865,55 @@ if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
         $env:PATH = "$winGetLinks;$env:PATH"
     }
 
+    function global:Get-ApplicationSourcePriority {
+        param([Parameter(Mandatory = $true)][string]$Source)
+
+        if ([string]::IsNullOrWhiteSpace($Source)) {
+            return 100
+        }
+
+        if ($Source -match '(?i)uutils[.\-_]?coreutils') {
+            return 0
+        }
+
+        if ($Source -match '\\Git\\usr\\bin\\') {
+            return 10
+        }
+
+        if ($Source -match '\\Git\\shims\\') {
+            return 30
+        }
+
+        return 5
+    }
+
+    function global:Get-PreferredApplicationCommand {
+        param(
+            [Parameter(Mandatory = $true)][string]$Name,
+            [string]$ExcludeDir = $null
+        )
+
+        try {
+            $apps = @(Get-Command $Name -CommandType Application -All -ErrorAction SilentlyContinue)
+            if (-not $apps) { return $null }
+
+            $bestApp = $apps |
+                Where-Object {
+                    $_.Source -and
+                    [System.IO.Path]::GetExtension($_.Source) -eq '.exe' -and
+                    (-not $ExcludeDir -or -not $_.Source.StartsWith($ExcludeDir.Trim().TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase))
+                } |
+                Sort-Object @{ Expression = { Get-ApplicationSourcePriority -Source $_.Source } }, @{ Expression = { $_.Source } } |
+                Select-Object -First 1
+
+            return $bestApp
+        }
+        catch {
+            Write-Verbose "Ignored error in Get-PreferredApplicationCommand: $($_.Exception.Message)"
+            return $null
+        }
+    }
+
     function global:Resolve-SmartShellExecutable {
         param(
             [Parameter(Mandatory = $true)]
@@ -807,7 +929,7 @@ if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
                 continue
             }
 
-            $cmd = Get-Command $candidate -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            $cmd = Get-PreferredApplicationCommand -Name $candidate
             if ($cmd) {
                 $script:SmartShellExeCache[$cacheKey] = $cmd.Source
                 return $cmd.Source
@@ -1860,9 +1982,12 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
         $missingCommands = @(
             $Catalog |
             Where-Object {
-                $_.Command -and -not (Get-Command ([string]$_.Command) -CommandType Application -ErrorAction SilentlyContinue)
+                ($_.Command -and -not (Get-Command ([string]$_.Command) -CommandType Application -ErrorAction SilentlyContinue)) -or
+                ($_.Kind -eq 'Package' -and $_.ProbeCommands -and -not (Test-CoreUtilsLayerAvailable -ProbeCommands @($_.ProbeCommands)))
             } |
-            ForEach-Object { [string]$_.Command }
+            ForEach-Object {
+                if ($_.Command) { [string]$_.Command } else { [string]$_.PackageName }
+            }
         )
 
         if ($missingCommands.Count -gt 0) {
@@ -1875,9 +2000,15 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
 
     foreach ($tool in $Catalog) {
         $commandName = [string]$tool.Command
-        if ([string]::IsNullOrWhiteSpace($commandName)) { continue }
-
-        if (Get-Command $commandName -CommandType Application -ErrorAction SilentlyContinue) {
+        if ($tool.Kind -eq 'Package') {
+            if ($tool.ProbeCommands -and (Test-CoreUtilsLayerAvailable -ProbeCommands @($tool.ProbeCommands))) {
+                continue
+            }
+        }
+        elseif ([string]::IsNullOrWhiteSpace($commandName)) {
+            continue
+        }
+        elseif (Get-Command $commandName -CommandType Application -ErrorAction SilentlyContinue) {
             continue
         }
 
@@ -1889,7 +2020,8 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
 
         if ($wingetAvailable -and $tool.WingetId) {
             $attempted += "winget"
-            Write-Dim "Installing $commandName via winget ($($tool.WingetId))..."
+            $installLabel = if ($tool.Kind -eq 'Package' -and $tool.PackageName) { [string]$tool.PackageName } else { $commandName }
+            Write-Dim "Installing $installLabel via winget ($($tool.WingetId))..."
             if ($script:DryRun) {
                 Write-DryRun "winget install --id $($tool.WingetId) ..."
                 $exitCode = 0
@@ -1907,7 +2039,8 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
 
         if (-not $installed -and $chocoAvailable -and $tool.ChocoId) {
             $attempted += "choco"
-            Write-Dim "Installing $commandName via choco ($($tool.ChocoId))..."
+            $installLabel = if ($tool.Kind -eq 'Package' -and $tool.PackageName) { [string]$tool.PackageName } else { $commandName }
+            Write-Dim "Installing $installLabel via choco ($($tool.ChocoId))..."
             if ($script:DryRun) {
                 Write-DryRun "choco install $($tool.ChocoId) -y"
                 $exitCode = 0
@@ -1925,7 +2058,14 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
 
         if (-not $installed) {
             Update-SessionPath
-            if (Get-Command $commandName -CommandType Application -ErrorAction SilentlyContinue) {
+            if ($tool.Kind -eq 'Package') {
+                if ($tool.ProbeCommands -and (Test-CoreUtilsLayerAvailable -ProbeCommands @($tool.ProbeCommands))) {
+                    $installed = $true
+                    if (-not $managerUsed) { $managerUsed = "detected" }
+                    if (-not $packageIdUsed) { $packageIdUsed = "n/a" }
+                }
+            }
+            elseif (Get-Command $commandName -CommandType Application -ErrorAction SilentlyContinue) {
                 $installed = $true
                 if (-not $managerUsed) { $managerUsed = "detected" }
                 if (-not $packageIdUsed) { $packageIdUsed = "n/a" }
@@ -2703,7 +2843,7 @@ Add-UnixShimIfMissing -Name "rgf" -Body {
     if (-not $Pattern) { throw "rgf: pattern required. Usage: rgf <pattern> [path ...]" }
     $Rest = @()
     if ($args.Count -gt 1) { $Rest = $args[1..($args.Count - 1)] }
-    $rg = Get-Command rg -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    $rg = Get-PreferredApplicationCommand -Name rg
     if (-not $rg) {
         throw "rgf: ripgrep 'rg' not found. Install with -InstallOptionalTools or winget install --id BurntSushi.ripgrep.MSVC --exact."
     }
@@ -2829,7 +2969,7 @@ function Invoke-RgFallback {
 Add-UnixShimIfMissing -Name "rgs" -Body {
     $ArgList = @($args)
     $stdinItems = @($input)
-    $rg = Get-Command rg -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    $rg = Get-PreferredApplicationCommand -Name rg
     if (-not $rg) {
         Invoke-RgFallback -ArgList $ArgList -InputItems $stdinItems
         return
@@ -2884,7 +3024,7 @@ if (-not (Get-Command rgl -ErrorAction SilentlyContinue)) {
 Add-UnixShimIfMissing -Name "rg" -Body {
     $ArgList = @($args)
     $stdinItems = @($input)
-    $rgExe = Get-Command rg -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    $rgExe = Get-PreferredApplicationCommand -Name rg
     if ($rgExe) {
         if ($stdinItems.Count -gt 0) {
             $stdinItems | & $rgExe.Source @ArgList
@@ -2898,7 +3038,7 @@ Add-UnixShimIfMissing -Name "rg" -Body {
 
 Add-UnixShimIfMissing -Name "nc" -Body {
     $ArgList = @($args)
-    $ncat = Get-Command ncat -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    $ncat = Get-PreferredApplicationCommand -Name ncat
     if (-not $ncat) {
         throw "nc: command not found. Install ncat (winget install --id Insecure.Nmap --exact)."
     }
@@ -2908,7 +3048,10 @@ Add-UnixShimIfMissing -Name "nc" -Body {
 Add-UnixShimIfMissing -Name "which" -Body {
     $Names = @($args)
     foreach ($name in $Names) {
-        $cmd = Get-Command $name -ErrorAction SilentlyContinue | Select-Object -First 1
+        $cmd = Get-PreferredApplicationCommand -Name $name
+        if (-not $cmd) {
+            $cmd = Get-Command $name -ErrorAction SilentlyContinue | Select-Object -First 1
+        }
         if ($cmd) {
             if ($cmd.Source) { $cmd.Source }
             elseif ($cmd.Definition) { $cmd.Definition }
@@ -2951,7 +3094,7 @@ Add-UnixShimIfMissing -Name "make" -Body {
     $ArgList = @($args)
     $alt = @("mingw32-make", "nmake")
     foreach ($name in $alt) {
-        $cmd = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        $cmd = Get-PreferredApplicationCommand -Name $name
         if ($cmd) {
             & $cmd.Source @ArgList
             return
