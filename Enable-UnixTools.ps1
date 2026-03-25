@@ -874,7 +874,9 @@ __MODULE_LINES__
     }
 
     if (Get-Module -ListAvailable PSReadLine) {
-        Import-Module PSReadLine -ErrorAction SilentlyContinue
+        if (-not (Get-Module PSReadLine -ErrorAction SilentlyContinue)) {
+            Import-Module PSReadLine -ErrorAction SilentlyContinue
+        }
         if (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
             try {
                 Set-PSReadLineOption -PredictionSource History
@@ -1564,8 +1566,73 @@ function Uninstall-NerdFont {
     }
 }
 
+function Update-EditorAndTerminalFontSettings {
+    param(
+        [Parameter(Mandatory = $true)][string]$SettingsPath
+    )
+
+    if (-not (Test-Path $SettingsPath)) {
+        return $false
+    }
+
+    $fontFamily = "CaskaydiaCove NF"
+    $editorDefault = "CaskaydiaCove NF, Consolas, 'Courier New', monospace"
+    $content = Get-Content $SettingsPath -Raw
+    $updated = $false
+    $missingSettings = @()
+
+    $editorPattern = '("editor\.fontFamily"\s*:\s*)"([^"]+)"'
+    if ($content -match $editorPattern) {
+        if ($Matches[2] -notmatch [regex]::Escape($fontFamily)) {
+            $content = $content -replace $editorPattern, ('$1"' + $fontFamily + ', `$2"')
+            $updated = $true
+        }
+    }
+    else {
+        $missingSettings += [pscustomobject]@{
+            Key   = 'editor.fontFamily'
+            Value = $editorDefault
+        }
+    }
+
+    $terminalPattern = '("terminal\.integrated\.fontFamily"\s*:\s*)"([^"]+)"'
+    if ($content -match $terminalPattern) {
+        if ($Matches[2] -notmatch [regex]::Escape($fontFamily)) {
+            $content = $content -replace $terminalPattern, ('$1"' + $fontFamily + ', `$2"')
+            $updated = $true
+        }
+    }
+    else {
+        $missingSettings += [pscustomobject]@{
+            Key   = 'terminal.integrated.fontFamily'
+            Value = $fontFamily
+        }
+    }
+
+    if ($missingSettings.Count -gt 0) {
+        $insertionLines = @(
+            $missingSettings | ForEach-Object {
+                '    "{0}": "{1}",' -f $_.Key, $_.Value
+            }
+        )
+        if ($content -match '^\{\s*') {
+            $content = $content -replace '^\{\s*', "{`n$($insertionLines -join "`n")`n"
+        }
+        else {
+            $content = ($insertionLines -join "`n") + "`n" + $content
+        }
+        $updated = $true
+    }
+
+    if ($updated) {
+        Set-Content -Path $SettingsPath -Value $content -Encoding UTF8
+    }
+
+    return $updated
+}
+
 function Set-TerminalFonts {
-    Write-Status -Type detail -Label "Configuring Editors" -Detail "injecting CaskaydiaCove NF into WT and VSCode" -Indent
+    Write-Status -Type detail -Label "Configuring Editors" -Detail "injecting CaskaydiaCove NF into WT, VSCode, and Antigravity" -Indent
     
     # 1. Windows Terminal
     $wtPaths = Get-ChildItem -Path "$env:LOCALAPPDATA\Packages" -Filter "Microsoft.WindowsTerminal*" -Directory -ErrorAction SilentlyContinue 
@@ -1588,26 +1655,15 @@ function Set-TerminalFonts {
     # 2. VS Code
     $vscodeSettingsDirs = @(
         (Join-Path $env:APPDATA "Code\User"),
-        (Join-Path $env:APPDATA "Code - Insiders\User")
+        (Join-Path $env:APPDATA "Code - Insiders\User"),
+        (Join-Path $env:APPDATA "Antigravity\User")
     )
     foreach ($dir in $vscodeSettingsDirs) {
         $vscodePath = Join-Path $dir "settings.json"
-        if (Test-Path $vscodePath) {
-            $content = Get-Content $vscodePath -Raw
-            if ($content -match '"editor\.fontFamily"\s*:') {
-                if ($content -notmatch 'CaskaydiaCove NF') {
-                    $content = $content -replace '("editor\.fontFamily"\s*:\s*)"([^"]+)"', ('$1"' + "CaskaydiaCove NF, `$2" + '"')
-                    Set-Content -Path $vscodePath -Value $content -Encoding UTF8
-                }
-            }
-            else {
-                $content = $content -replace '^\{\s*', "{`n    `"editor.fontFamily`": `"CaskaydiaCove NF, Consolas, 'Courier New', monospace`",`n"
-                Set-Content -Path $vscodePath -Value $content -Encoding UTF8
-            }
-        }
+        Update-EditorAndTerminalFontSettings -SettingsPath $vscodePath | Out-Null
     }
     
-    Write-Status -Type ok -Label "Configuration" -Detail "WT and VSCode updated to use Nerd Font" -Indent
+    Write-Status -Type ok -Label "Configuration" -Detail "WT, VSCode, and Antigravity updated to use Nerd Font" -Indent
 }
 
 function Install-TerminalSetup {

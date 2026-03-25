@@ -39,6 +39,7 @@ Describe 'Generated profile blocks' {
         ($block -match '(?m)^\s*Enable-UnixInteractiveFeatures\s*$') | Should Be $false
         ($block -match 'PSScriptAnalyzer') | Should Be $false
         ($block -match 'Set-PSReadLineOption -PredictionSource History') | Should Be $true
+        ($block -match 'if \(-not \(Get-Module PSReadLine -ErrorAction SilentlyContinue\)\) \{\s*Import-Module PSReadLine -ErrorAction SilentlyContinue\s*\}') | Should Be $true
     }
 
     It 'builds a legacy smart-shell block that eagerly enables interactive features' {
