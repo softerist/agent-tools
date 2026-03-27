@@ -3,7 +3,7 @@ $publishPath = Join-Path $repoRoot 'publish.ps1'
 $manifestPath = Join-Path $repoRoot 'Enable-UnixTools.psd1'
 . (Join-Path $PSScriptRoot 'Support\TestHelpers.ps1')
 
-Import-ScriptFunctions -ScriptPath $publishPath -Names @(
+Import-ScriptFunction -ScriptPath $publishPath -Names @(
     'Get-ManifestVersionDefault',
     'Assert-RequestedModuleVersionMatchesManifest',
     'Get-DefaultReadmeContent',

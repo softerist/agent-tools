@@ -1,4 +1,4 @@
-function Save-TerminalThemes {
+function Save-TerminalThemeBundle {
     param([Parameter(Mandatory = $true)][string]$ThemesDir)
 
     if ($script:DryRun) {
@@ -8,7 +8,7 @@ function Save-TerminalThemes {
 
     if (Test-Path $ThemesDir) {
         Write-Status -Type info -Label "Themes directory" -Detail "already exists, skipping download" -Indent
-        Update-ManagedOhMyPoshThemes -ThemesDir $ThemesDir
+        Update-ManagedOhMyPoshTheme -ThemesDir $ThemesDir
         return
     }
 
@@ -19,7 +19,7 @@ function Save-TerminalThemes {
         New-DirectoryIfMissing $ThemesDir
         Write-Status -Type detail -Label "Extracting themes" -Detail $ThemesDir -Indent
         Expand-Archive -Path $zip -DestinationPath $ThemesDir -Force -ErrorAction Stop
-        Update-ManagedOhMyPoshThemes -ThemesDir $ThemesDir
+        Update-ManagedOhMyPoshTheme -ThemesDir $ThemesDir
     }
     catch {
         Write-Status -Type warn -Label "Themes failed" -Detail $_.Exception.Message -Indent
@@ -29,7 +29,8 @@ function Save-TerminalThemes {
     }
 }
 
-function Update-ManagedOhMyPoshThemes {
+function Update-ManagedOhMyPoshTheme {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Theme file writes are gated by higher-level install flows and tested separately.')]
     param([Parameter(Mandatory = $true)][string]$ThemesDir)
 
     $lightgreenThemePath = Join-Path $ThemesDir 'lightgreen.omp.json'
@@ -178,7 +179,7 @@ function Uninstall-NerdFont {
     }
 }
 
-function Update-EditorAndTerminalFontSettings {
+function Update-EditorAndTerminalFontConfig {
     [CmdletBinding(SupportsShouldProcess = $true)]
     [OutputType([bool])]
     param(
@@ -245,7 +246,8 @@ function Update-EditorAndTerminalFontSettings {
     return $updated
 }
 
-function Update-WindowsTerminalFontSettings {
+function Update-WindowsTerminalFontConfig {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Settings file writes are gated by higher-level install flows and tested separately.')]
     param(
         [Parameter(Mandatory = $true)][string]$SettingsPath
     )
@@ -273,7 +275,7 @@ function Update-WindowsTerminalFontSettings {
     return $true
 }
 
-function Set-TerminalFonts {
+function Set-TerminalFontConfig {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param()
 
@@ -282,7 +284,7 @@ function Set-TerminalFonts {
     $wtPaths = Get-ChildItem -Path "$env:LOCALAPPDATA\Packages" -Filter "Microsoft.WindowsTerminal*" -Directory -ErrorAction SilentlyContinue
     foreach ($wtDir in $wtPaths) {
         $wtSettings = Join-Path $wtDir.FullName "LocalState\settings.json"
-        Update-WindowsTerminalFontSettings -SettingsPath $wtSettings | Out-Null
+        Update-WindowsTerminalFontConfig -SettingsPath $wtSettings | Out-Null
     }
 
     $vscodeSettingsDirs = @(
@@ -292,7 +294,7 @@ function Set-TerminalFonts {
     )
     foreach ($dir in $vscodeSettingsDirs) {
         $vscodePath = Join-Path $dir "settings.json"
-        Update-EditorAndTerminalFontSettings -SettingsPath $vscodePath | Out-Null
+        Update-EditorAndTerminalFontConfig -SettingsPath $vscodePath | Out-Null
     }
 
     Write-Status -Type ok -Label "Configuration" -Detail "WT, VSCode, and Antigravity updated to use Nerd Font" -Indent
@@ -305,8 +307,8 @@ function Install-TerminalSetup {
 
     Write-Section "Terminal Setup"
 
-    Save-TerminalThemes -ThemesDir $ThemesDir
+    Save-TerminalThemeBundle -ThemesDir $ThemesDir
     Install-NerdFont
-    Set-TerminalFonts
+    Set-TerminalFontConfig
 }
 

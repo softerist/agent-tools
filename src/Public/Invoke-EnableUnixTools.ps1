@@ -1,4 +1,4 @@
-function Invoke-EnableUnixTools {
+function Invoke-UnixToolSetup {
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium', PositionalBinding = $false)]
     param(
         [switch]$CreateShims,
@@ -26,7 +26,7 @@ function Invoke-EnableUnixTools {
     Set-StrictMode -Version Latest
     $ErrorActionPreference = 'Stop'
     if ($false) {
-        $PSCmdlet.ShouldProcess('Invoke-EnableUnixTools', 'Delegate to MainExecutionBody.ps1') | Out-Null
+        $PSCmdlet.ShouldProcess('Invoke-UnixToolSetup', 'Delegate to MainExecutionBody.ps1') | Out-Null
     }
 
     $repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent

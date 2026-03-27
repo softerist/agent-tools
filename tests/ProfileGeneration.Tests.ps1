@@ -2,13 +2,13 @@
 $scriptPath = Join-Path $repoRoot 'Enable-UnixTools.ps1'
 . (Join-Path $PSScriptRoot 'Support\TestHelpers.ps1')
 
-Import-ScriptFunctions -ScriptPath $scriptPath -Names @(
+Import-ScriptFunction -ScriptPath $scriptPath -Names @(
     'Get-OptionalPowerShellModuleCatalog',
     'Get-SmartShellOptionalModuleNameSet',
     'Get-ProfileSmartShellBlockBody',
     'Resolve-ProfilePromptTheme',
     'Get-ProfilePromptBlockBody',
-    'Update-ManagedOhMyPoshThemes'
+    'Update-ManagedOhMyPoshTheme'
 )
 
 Describe 'Generated profile blocks' {
@@ -43,7 +43,7 @@ Describe 'Generated profile blocks' {
     It 'builds a fast smart-shell block with deferred interactive features' {
         $block = Get-ProfileSmartShellBlockBody -StartupMode Fast
 
-        ($block -match 'function Enable-UnixInteractiveFeatures') | Should Be $true
+        ($block -match 'function Enable-UnixInteractiveFeatureSet') | Should Be $true
         ($block -match "StartupMode -eq 'Legacy'") | Should Be $true
         ($block -match 'Set-PSReadLineOption -PredictionSource History') | Should Be $true
         ($block -match 'Import-Module \$module -ErrorAction SilentlyContinue -WarningAction SilentlyContinue 2>\$null 3>\$null \| Out-Null') | Should Be $true
@@ -52,7 +52,7 @@ Describe 'Generated profile blocks' {
     It 'builds a legacy smart-shell block that eagerly enables interactive features' {
         $block = Get-ProfileSmartShellBlockBody -StartupMode Legacy
 
-        ($block -match '(?m)^\s*Enable-UnixInteractiveFeatures\s*$') | Should Be $true
+        ($block -match '(?m)^\s*Enable-UnixInteractiveFeatureSet\s*$') | Should Be $true
         ($block -match '# Startup mode: Legacy') | Should Be $true
     }
 
@@ -64,7 +64,7 @@ Describe 'Generated profile blocks' {
         ($block -match 'ANTIGRAVITY_CLI_ALIAS') | Should Be $true
         ($block -match "UnixToolsPromptState = 'Pending'") | Should Be $true
         ($block -match 'function global:prompt') | Should Be $true
-        ($block -match 'Enable-UnixInteractiveFeatures') | Should Be $true
+        ($block -match 'Enable-UnixInteractiveFeatureSet') | Should Be $true
     }
 
     It 'builds an eager prompt block without warmup state' {
@@ -122,7 +122,7 @@ Describe 'Generated profile blocks' {
 }
 '@ | Set-Content -Path $themePath -Encoding UTF8
 
-            Update-ManagedOhMyPoshThemes -ThemesDir $themesDir
+            Update-ManagedOhMyPoshTheme -ThemesDir $themesDir
 
             $theme = Get-Content -Raw -Path $themePath | ConvertFrom-Json
             $pathSegment = $theme.blocks[0].segments[0]

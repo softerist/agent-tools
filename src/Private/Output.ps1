@@ -1,4 +1,5 @@
 function Write-Header {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive console output is intentionally centralized in this file.')]
     param(
         [string]$Title = "Unix Tools for Windows",
         [string]$Version = $script:EnableUnixToolsVersion,
@@ -36,6 +37,7 @@ function Write-Header {
 }
 
 function Write-Section {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive console output is intentionally centralized in this file.')]
     param([Parameter(Mandatory)][string]$Title)
 
     $ui = $script:UI
@@ -47,6 +49,7 @@ function Write-Section {
 }
 
 function Write-Status {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive console output is intentionally centralized in this file.')]
     param(
         [Parameter(Mandatory)][ValidateSet('ok', 'fail', 'info', 'detail', 'warn', 'skip')][string]$Type,
         [Parameter(Mandatory)][string]$Label,
@@ -89,6 +92,7 @@ function Write-Status {
 }
 
 function Write-Dim {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive console output is intentionally centralized in this file.')]
     param([Parameter(Mandatory)][string]$Text, [switch]$Indent)
 
     $prefix = if ($Indent) { "      " } else { "  " }
@@ -96,6 +100,7 @@ function Write-Dim {
 }
 
 function Write-CompactList {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive console output is intentionally centralized in this file.')]
     param(
         [Parameter(Mandatory)][string[]]$Items,
         [int]$MaxWidth = 70,
@@ -119,6 +124,7 @@ function Write-CompactList {
 }
 
 function Write-Footer {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive console output is intentionally centralized in this file.')]
     param(
         [string]$Message = "Done",
         [ValidateSet('ok', 'fail', 'warn')][string]$Type = 'ok'
@@ -155,16 +161,21 @@ function Write-Footer {
 }
 
 function Write-DryRun {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive console output is intentionally centralized in this file.')]
     param([Parameter(Mandatory)][string]$Text)
 
     Write-Host "  [DRYRUN] $Text" -ForegroundColor DarkGray
 }
 
 function Write-BlankLine {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive console output is intentionally centralized in this file.')]
+    param()
+
     Write-Host ""
 }
 
 function Write-AccentLine {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive console output is intentionally centralized in this file.')]
     param([Parameter(Mandatory)][string]$Text)
 
     Write-Host $Text -ForegroundColor DarkCyan

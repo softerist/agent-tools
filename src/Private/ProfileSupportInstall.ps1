@@ -23,7 +23,7 @@ function Get-ManagedProfileSupportRoot {
     return Join-Path $base 'UnixToolsSystemWide\profile'
 }
 
-function Get-ManagedProfileSupportFileNames {
+function Get-ManagedProfileSupportFileNameList {
     return @(
         'UnixTools.ProfileLoader.ps1',
         'UnixTools.ProfileShared.ps1',
@@ -47,6 +47,7 @@ function Read-ProfileSupportTemplate {
 }
 
 function New-ProfileSupportConfigText {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'This helper only generates text content despite the New verb.')]
     param(
         [Parameter(Mandatory = $true)][string]$SupportRoot,
         [Parameter(Mandatory = $true)][string]$StartupMode,
@@ -72,7 +73,7 @@ function New-ProfileSupportConfigText {
 "@
 }
 
-function Write-ManagedProfileSupportFiles {
+function Write-ManagedProfileSupportPayload {
     param(
         [Parameter(Mandatory = $true)][string]$StartupMode,
         [Parameter(Mandatory = $true)][string]$PromptMode,
@@ -99,7 +100,7 @@ function Write-ManagedProfileSupportFiles {
     return $supportRoot
 }
 
-function Remove-ManagedProfileSupportFiles {
+function Remove-ManagedProfileSupportPayload {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param()
 
@@ -108,7 +109,7 @@ function Remove-ManagedProfileSupportFiles {
         return $supportRoot
     }
 
-    foreach ($fileName in Get-ManagedProfileSupportFileNames) {
+    foreach ($fileName in Get-ManagedProfileSupportFileNameList) {
         $path = Join-Path $supportRoot $fileName
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             continue
@@ -219,7 +220,7 @@ function Get-ProfilePromptBlockBody {
     ) -join "`r`n"
 }
 
-function Install-ProfileInlineShims {
+function Install-ProfileInlineSupport {
     param(
         [string]$ThemesDir,
         [string]$Theme = 'lightgreen',
@@ -231,8 +232,8 @@ function Install-ProfileInlineShims {
     $backup = Backup-ProfileFile -ProfilePath $profilePath
     if ($backup) { Write-Status -Type detail -Label 'Profile backup' -Detail (Split-Path $backup -Leaf) }
 
-    Remove-InstalledProfileShims | Out-Null
-    $supportRoot = Write-ManagedProfileSupportFiles -StartupMode $StartupMode -PromptMode $PromptMode -Theme $Theme -ThemesDir $ThemesDir
+    Remove-InstalledProfileSupport | Out-Null
+    $supportRoot = Write-ManagedProfileSupportPayload -StartupMode $StartupMode -PromptMode $PromptMode -Theme $Theme -ThemesDir $ThemesDir
 
     $startMarker = '# >>> unix-tools-profile >>>'
     $endMarker = '# <<< unix-tools-profile <<<'
@@ -243,12 +244,12 @@ function Install-ProfileInlineShims {
     return 'profile-loader'
 }
 
-function Install-ProfileMissingShims {
-    Install-ProfileInlineShims -StartupMode 'Fast' -PromptMode 'Off'
+function Install-ProfileMissingSupport {
+    Install-ProfileInlineSupport -StartupMode 'Fast' -PromptMode 'Off'
 }
 
 function Install-ProfileAliasCompat {
-    Install-ProfileInlineShims -StartupMode 'Fast' -PromptMode 'Off'
+    Install-ProfileInlineSupport -StartupMode 'Fast' -PromptMode 'Off'
 }
 
 function Install-ProfileOhMyPosh {
@@ -258,7 +259,7 @@ function Install-ProfileOhMyPosh {
         [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Eager'
     )
 
-    Install-ProfileInlineShims -ThemesDir $ThemesDir -Theme $Theme -StartupMode 'Fast' -PromptMode $PromptInitMode
+    Install-ProfileInlineSupport -ThemesDir $ThemesDir -Theme $Theme -StartupMode 'Fast' -PromptMode $PromptInitMode
 }
 
 function Install-ProfileSmartShell {
@@ -266,5 +267,5 @@ function Install-ProfileSmartShell {
         [ValidateSet('Fast', 'Legacy')][string]$StartupMode = 'Fast'
     )
 
-    Install-ProfileInlineShims -StartupMode $StartupMode -PromptMode 'Off'
+    Install-ProfileInlineSupport -StartupMode $StartupMode -PromptMode 'Off'
 }

@@ -3,7 +3,7 @@ $scriptPath = Join-Path $repoRoot 'Enable-UnixTools.ps1'
 $modulePath = Join-Path $repoRoot 'Enable-UnixTools.psd1'
 . (Join-Path $PSScriptRoot 'Support\TestHelpers.ps1')
 
-Import-ScriptFunctions -ScriptPath $scriptPath -Names @('Get-OptionalPowerShellModuleCatalog')
+Import-ScriptFunction -ScriptPath $scriptPath -Names @('Get-OptionalPowerShellModuleCatalog')
 
 Describe 'Public surface and docs' {
     It 'keeps module wrapper parameters aligned with script parameters' {
@@ -20,7 +20,7 @@ Describe 'Public surface and docs' {
             (Get-Command Enable-UnixTools).Parameters.Keys |
                 Where-Object { $_ -notin $commonParameters }
         )
-        $expectedParameters = @((Get-ScriptParamNames -ScriptPath $scriptPath) + 'ArgumentList' | Sort-Object -Unique)
+        $expectedParameters = @((Get-ScriptParameterNameList -ScriptPath $scriptPath) + 'ArgumentList' | Sort-Object -Unique)
 
         ((@($wrapperParameters | Sort-Object)) -join ',') | Should Be (($expectedParameters) -join ',')
     }

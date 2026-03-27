@@ -33,4 +33,4 @@ if (-not (Test-Path -LiteralPath $bootstrapPath -PathType Leaf)) {
 
 . $bootstrapPath
 
-Invoke-EnableUnixTools @PSBoundParameters
+Invoke-UnixToolSetup @PSBoundParameters

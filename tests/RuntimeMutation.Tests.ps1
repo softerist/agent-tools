@@ -1,22 +1,22 @@
 $repoRoot = Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'Support\TestHelpers.ps1')
 
-Import-SourceFunctions -SourcePath (Join-Path $repoRoot 'src\Private\Output.ps1') -Names @(
+Import-SourceFunction -SourcePath (Join-Path $repoRoot 'src\Private\Output.ps1') -Names @(
     'Write-DryRun'
 )
-Import-SourceFunctions -SourcePath (Join-Path $repoRoot 'src\Private\FileIO.ps1') -Names @(
+Import-SourceFunction -SourcePath (Join-Path $repoRoot 'src\Private\FileIO.ps1') -Names @(
     'Initialize-Directory',
     'Write-AtomicTextFile',
     'Write-AtomicUtf8File',
     'Write-AtomicAsciiFile'
 )
-Import-SourceFunctions -SourcePath (Join-Path $repoRoot 'src\Private\PathManagement.ps1') -Names @(
+Import-SourceFunction -SourcePath (Join-Path $repoRoot 'src\Private\PathManagement.ps1') -Names @(
     'Write-ShimCmd'
 )
-Import-SourceFunctions -SourcePath (Join-Path $repoRoot 'src\Private\TerminalSetup.ps1') -Names @(
-    'Update-EditorAndTerminalFontSettings',
-    'Update-WindowsTerminalFontSettings',
-    'Set-TerminalFonts'
+Import-SourceFunction -SourcePath (Join-Path $repoRoot 'src\Private\TerminalSetup.ps1') -Names @(
+    'Update-EditorAndTerminalFontConfig',
+    'Update-WindowsTerminalFontConfig',
+    'Set-TerminalFontConfig'
 )
 
 function global:Write-Status {
@@ -95,7 +95,7 @@ Describe 'Runtime mutation helpers' {
             $env:APPDATA = $tempAppData
             $env:LOCALAPPDATA = $tempLocalAppData
 
-            Set-TerminalFonts
+            Set-TerminalFontConfig
 
             $wtSettings = Get-Content -Path $wtSettingsPath -Raw
             ($wtSettings -match '"face"\s*:\s*"CaskaydiaCove NF"') | Should Be $true

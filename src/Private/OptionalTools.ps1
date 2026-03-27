@@ -254,7 +254,7 @@ function Install-MissingOptionalPowerShellModuleSet([object[]]$Catalog) {
 function Install-MissingOptionalToolSet([object[]]$Catalog) {
     if (-not $Catalog -or $Catalog.Count -eq 0) { return @() }
 
-    $pmProbe = @(Initialize-OptionalPackageManagers)
+    $pmProbe = @(Initialize-OptionalPackageManagerSet)
     $pm = @(
         $pmProbe | Where-Object {
             $_ -and

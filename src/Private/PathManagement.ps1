@@ -129,6 +129,7 @@ function Assert-PathLength([string]$PathValue, [string]$Scope = "Machine") {
 }
 
 function Set-ScopedPathValue {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'ShouldProcess is enforced by the outer orchestration flow before this internal helper is called.')]
     param(
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$PathValue,
         [Parameter(Mandatory = $true)][string]$Scope
@@ -163,7 +164,7 @@ function Add-MachinePathPrepend([string]$pathToPrepend) {
     Set-ScopedPathValue -PathValue $newPath -Scope $scope
 }
 
-function Add-MachinePathEntries([string[]]$pathsToAdd) {
+function Add-MachinePathEntry([string[]]$pathsToAdd) {
     $scope = $script:PathScope
     $current = [Environment]::GetEnvironmentVariable("Path", $scope)
     if (-not $current) { $current = "" }
@@ -193,7 +194,8 @@ function Add-MachinePathEntries([string[]]$pathsToAdd) {
     return $changed
 }
 
-function Remove-MachinePathEntries {
+function Remove-MachinePathEntry {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'ShouldProcess is enforced by the outer orchestration flow before this internal helper is called.')]
     param([string[]]$pathsToRemove)
 
     $scope = $script:PathScope
@@ -220,7 +222,8 @@ function Remove-MachinePathEntries {
     return $true
 }
 
-function Update-MachinePathEntries {
+function Update-MachinePathEntry {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'ShouldProcess is enforced by the outer orchestration flow before this internal helper is called.')]
     param()
 
     $scope = $script:PathScope
@@ -242,6 +245,7 @@ function Update-MachinePathEntries {
 }
 
 function New-DirectoryIfMissing {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Directory creation is controlled by higher-level install flows and DryRun behavior.')]
     param([string]$dir)
 
     Initialize-Directory -Path $dir
@@ -323,7 +327,7 @@ function Get-ApplicationCommandIndex([string]$excludeDir = $null) {
     return $index
 }
 
-function Initialize-OptionalPackageManagers {
+function Initialize-OptionalPackageManagerSet {
     $wingetAvailable = [bool](Get-Command winget -ErrorAction SilentlyContinue)
     $chocoAvailable = [bool](Get-Command choco  -ErrorAction SilentlyContinue)
 
@@ -377,6 +381,7 @@ public class NativeMethods {
 }
 
 function Update-SessionPath {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Session refresh is an internal runtime helper, not a user-invoked mutator.')]
     param()
 
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +

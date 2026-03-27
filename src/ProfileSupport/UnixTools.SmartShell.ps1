@@ -51,7 +51,7 @@ if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
         }
     }
 
-    function Enable-UnixInteractiveFeatures {
+    function Enable-UnixInteractiveFeatureSet {
         if ($script:UnixInteractiveFeaturesEnabled) {
             return
         }
@@ -110,8 +110,10 @@ if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
     }
 
     if ($script:UnixToolsProfileConfig.StartupMode -eq 'Legacy') {
-        Enable-UnixInteractiveFeatures
+        Enable-UnixInteractiveFeatureSet
     }
+
+    Set-Alias -Name Enable-UnixInteractiveFeatures -Value Enable-UnixInteractiveFeatureSet -Scope Global -ErrorAction SilentlyContinue
 
     $zoxideExe = Resolve-SmartShellExecutable -Candidates @('zoxide.exe', 'zoxide.cmd')
     if ($zoxideExe) {

@@ -2,9 +2,9 @@ $repoRoot = Split-Path $PSScriptRoot -Parent
 $scriptPath = Join-Path $repoRoot 'Enable-UnixTools.ps1'
 . (Join-Path $PSScriptRoot 'Support\TestHelpers.ps1')
 
-Import-ScriptFunctions -ScriptPath $scriptPath -Names @(
-    'Set-TerminalFonts',
-    'Update-EditorAndTerminalFontSettings'
+Import-ScriptFunction -ScriptPath $scriptPath -Names @(
+    'Set-TerminalFontConfig',
+    'Update-EditorAndTerminalFontConfig'
 )
 
 function global:Write-Status {
@@ -48,7 +48,7 @@ Describe 'Terminal setup' {
             $env:APPDATA = $tempRoot
             $env:LOCALAPPDATA = $tempLocalRoot
 
-            Set-TerminalFonts
+            Set-TerminalFontConfig
 
             $codeSettings = Get-Content -Path (Join-Path $codeSettingsDir 'settings.json') -Raw
             ($codeSettings -match '"editor\.fontFamily"\s*:') | Should Be $true

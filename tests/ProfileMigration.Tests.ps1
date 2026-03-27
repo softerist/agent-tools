@@ -2,9 +2,9 @@ $repoRoot = Split-Path $PSScriptRoot -Parent
 $scriptPath = Join-Path $repoRoot 'Enable-UnixTools.ps1'
 . (Join-Path $PSScriptRoot 'Support\TestHelpers.ps1')
 
-Import-ScriptFunctions -ScriptPath $scriptPath -Names @(
+Import-ScriptFunction -ScriptPath $scriptPath -Names @(
     'Find-LegacyInlineShimBlock',
-    'Remove-LegacyInlineProfileShims',
+    'Remove-LegacyInlineProfileShimBlock',
     'Get-ProfileMetadataValue',
     'Get-ProfileInstallationState',
     'Set-ProfileBlock'
@@ -40,7 +40,7 @@ Set-Alias foo bar
             $found = Find-LegacyInlineShimBlock -ProfilePath $profilePath
             $found.Status | Should Be 'Found'
 
-            $result = Remove-LegacyInlineProfileShims -ProfilePath $profilePath
+            $result = Remove-LegacyInlineProfileShimBlock -ProfilePath $profilePath
             $result.Status | Should Be 'Removed'
 
             $updated = Get-Content -Path $profilePath -Raw

@@ -4,7 +4,7 @@
 .SYNOPSIS
     Adds Unix-compatible tools to Windows PATH with optional shims and profile support.
 #>
-function Enable-UnixTools {
+function Enable-UnixTool {
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium', PositionalBinding = $false)]
     param(
         [switch]$CreateShims,
@@ -57,7 +57,9 @@ function Enable-UnixTools {
         $invokeParams[$entry.Key] = $entry.Value
     }
 
-    Invoke-EnableUnixTools @invokeParams @ArgumentList
+    Invoke-UnixToolSetup @invokeParams @ArgumentList
 }
 
-Export-ModuleMember -Function 'Enable-UnixTools'
+Set-Alias -Name 'Enable-UnixTools' -Value 'Enable-UnixTool'
+
+Export-ModuleMember -Function 'Enable-UnixTool' -Alias 'Enable-UnixTools'

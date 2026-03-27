@@ -7,10 +7,10 @@
     Copyright         = '(c) softerist. All rights reserved.'
     Description       = 'Adds Unix-compatible tools to Windows PATH with optional shims and profile wrappers.'
     PowerShellVersion = '5.1'
-    FunctionsToExport = @('Enable-UnixTools')
+    FunctionsToExport = @('Enable-UnixTool')
     CmdletsToExport   = @()
     VariablesToExport = @()
-    AliasesToExport   = @()
+    AliasesToExport   = @('Enable-UnixTools')
     FileList          = @(
         'Enable-UnixTools.psm1'
         'Enable-UnixTools.psd1'

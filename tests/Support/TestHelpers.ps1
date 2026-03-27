@@ -11,7 +11,7 @@ function Get-ScriptAst {
     return $ast
 }
 
-function Import-ScriptFunctions {
+function Import-ScriptFunction {
     param(
         [Parameter(Mandatory = $true)][string]$ScriptPath,
         [Parameter(Mandatory = $true)][string[]]$Names
@@ -61,7 +61,7 @@ function Import-ScriptFunctions {
     }
 }
 
-function Import-SourceFunctions {
+function Import-SourceFunction {
     param(
         [Parameter(Mandatory = $true)][string]$SourcePath,
         [Parameter(Mandatory = $true)][string[]]$Names
@@ -83,7 +83,7 @@ function Import-SourceFunctions {
     }
 }
 
-function Get-ScriptParamNames {
+function Get-ScriptParameterNameList {
     param([Parameter(Mandatory = $true)][string]$ScriptPath)
 
     $ast = Get-ScriptAst -ScriptPath $ScriptPath
@@ -91,6 +91,7 @@ function Get-ScriptParamNames {
 }
 
 function New-TestTempPath {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Test helper only returns a temporary path string.')]
     param([string]$Extension = '.tmp')
 
     return Join-Path ([System.IO.Path]::GetTempPath()) ("agent-tools-{0}{1}" -f ([guid]::NewGuid()), $Extension)

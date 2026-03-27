@@ -91,7 +91,7 @@ function Invoke-UninstallFlow {
     $candidateShimDirs = @($candidateShimDirs | Select-Object -Unique)
 
     if ($Cmdlet.ShouldProcess($PROFILE.CurrentUserCurrentHost, 'Remove unix-tools profile shim blocks')) {
-        $removalResult = Remove-InstalledProfileShims
+        $removalResult = Remove-InstalledProfileSupport
         $State.DidChange = $true
         $removalDetail = if ($removalResult.Status -eq 'Removed') { 'unix-tools markers cleaned + legacy inline block removed' } else { 'unix-tools markers cleaned' }
         Write-Status -Type ok -Label 'Profile blocks removed' -Detail $removalDetail
@@ -135,7 +135,7 @@ function Invoke-UninstallFlow {
 
     foreach ($shimDirPath in $candidateShimDirs) {
         if ($Cmdlet.ShouldProcess($script:PathDisplay, "Remove shim directory entry $shimDirPath")) {
-            if (Remove-MachinePathEntries -pathsToRemove @($shimDirPath)) {
+            if (Remove-MachinePathEntry -pathsToRemove @($shimDirPath)) {
                 $State.DidChange = $true
                 Write-Status -Type ok -Label 'PATH entry removed' -Detail $shimDirPath
             }
@@ -218,7 +218,7 @@ function Invoke-PathConfigurationFlow {
 
     $changed = $false
     if ($Cmdlet.ShouldProcess($script:PathDisplay, 'Add tool directories')) {
-        $changed = Add-MachinePathEntries $pathsToAdd
+        $changed = Add-MachinePathEntry $pathsToAdd
     }
 
     if ($changed) {
@@ -231,7 +231,7 @@ function Invoke-PathConfigurationFlow {
 
     if ($NormalizePath) {
         if ($Cmdlet.ShouldProcess($script:PathDisplay, 'Normalize PATH entries')) {
-            Update-MachinePathEntries
+            Update-MachinePathEntry
             $State.DidChange = $true
             Write-Status -Type ok -Label 'PATH normalized' -Detail 'removed duplicates/trailing slashes'
         }
@@ -466,7 +466,7 @@ function Invoke-ProfileSetupFlow {
 
     Write-Section 'Profile'
     if ($Cmdlet.ShouldProcess($PROFILE.CurrentUserCurrentHost, 'Install/update unix-tools profile shim blocks')) {
-        Install-ProfileInlineShims -ThemesDir $ThemesDir -Theme $Theme -StartupMode $ProfileStartupMode -PromptMode $PromptInitMode
+        Install-ProfileInlineSupport -ThemesDir $ThemesDir -Theme $Theme -StartupMode $ProfileStartupMode -PromptMode $PromptInitMode
         $profilePath = $PROFILE.CurrentUserCurrentHost
         $expectedHash = $null
         if (Test-Path $profilePath) {

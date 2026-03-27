@@ -22,8 +22,8 @@ if (-not $env:CODEX_THREAD_ID -and -not $env:CODEX_INTERNAL_ORIGINATOR_OVERRIDE 
     if ($configPath) {
         switch ($script:UnixToolsProfileConfig.PromptInitMode) {
             'Eager' {
-                if (Get-Command Enable-UnixInteractiveFeatures -ErrorAction SilentlyContinue) {
-                    Enable-UnixInteractiveFeatures
+                if (Get-Command Enable-UnixInteractiveFeatureSet -ErrorAction SilentlyContinue) {
+                    Enable-UnixInteractiveFeatureSet
                 }
                 & ([scriptblock]::Create((oh-my-posh init pwsh --config "$configPath" | Out-String)))
             }
@@ -40,8 +40,8 @@ if (-not $env:CODEX_THREAD_ID -and -not $env:CODEX_INTERNAL_ORIGINATOR_OVERRIDE 
                     if ($script:UnixToolsPromptState -eq 'Failed') { return $false }
 
                     try {
-                        if (Get-Command Enable-UnixInteractiveFeatures -ErrorAction SilentlyContinue) {
-                            Enable-UnixInteractiveFeatures
+                        if (Get-Command Enable-UnixInteractiveFeatureSet -ErrorAction SilentlyContinue) {
+                            Enable-UnixInteractiveFeatureSet
                         }
                         & ([scriptblock]::Create((oh-my-posh init pwsh --config "$configPath" | Out-String)))
                         $script:UnixToolsPromptState = 'Loaded'

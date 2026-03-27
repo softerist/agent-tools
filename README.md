@@ -28,7 +28,7 @@ Enable-UnixTools -Uninstall -UninstallOptionalTools
 
 Defaults:
 
-- `-ProfileStartupMode Fast` keeps startup imports minimal and exposes `Enable-UnixInteractiveFeatures` for on-demand shell extras.
+- `-ProfileStartupMode Fast` keeps startup imports minimal and exposes `Enable-UnixInteractiveFeatureSet` for on-demand shell extras.
 - `-PromptInitMode Eager` initializes Oh My Posh during profile load so the theme is active on the first prompt.
 - `uutils.coreutils` is installed as the base Unix command layer when optional tools are installed. For GNU-sensitive core commands like `ls`, `cp`, `mv`, `rm`, `cat`, and `sort`, resolution still prefers Git's binaries; for the rest, the shims prefer coreutils when both are present.
 - `lightgreen.omp.json` is automatically patched after theme install to keep a cleaner right prompt and a more polished folder path. `Terminal-Icons` plus `CaskaydiaCove NF` provide the file/folder glyphs.

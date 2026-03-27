@@ -2,7 +2,7 @@ $repoRoot = Split-Path $PSScriptRoot -Parent
 $scriptPath = Join-Path $repoRoot 'Enable-UnixTools.ps1'
 . (Join-Path $PSScriptRoot 'Support\TestHelpers.ps1')
 
-Import-ScriptFunctions -ScriptPath $scriptPath -Names @(
+Import-ScriptFunction -ScriptPath $scriptPath -Names @(
     'Get-OptionalToolCatalog',
     'Test-GitPreferredCoreCommand',
     'Get-ApplicationSourcePriority',

@@ -107,7 +107,8 @@ function Find-LegacyInlineShimBlock {
     return [pscustomobject]$result
 }
 
-function Remove-LegacyInlineProfileShims {
+function Remove-LegacyInlineProfileShimBlock {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Profile mutation confirmation is handled by the caller before this helper runs.')]
     param([Parameter(Mandatory = $true)][string]$ProfilePath)
 
     $block = Find-LegacyInlineShimBlock -ProfilePath $ProfilePath
@@ -197,7 +198,8 @@ function Get-ProfileInstallationState {
     }
 }
 
-function Remove-ManagedProfileBlocks {
+function Remove-ManagedProfileBlockSet {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Profile mutation confirmation is handled by the caller before this helper runs.')]
     param([Parameter(Mandatory = $true)][string]$ProfilePath)
 
     if (-not (Test-Path -LiteralPath $ProfilePath -PathType Leaf)) { return }
@@ -226,18 +228,19 @@ function Remove-ManagedProfileBlocks {
     }
 }
 
-function Remove-InstalledProfileShims {
+function Remove-InstalledProfileSupport {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The uninstall orchestration flow owns ShouldProcess for this internal helper.')]
     param()
 
     $profilePath = $PROFILE.CurrentUserCurrentHost
     $backup = Backup-ProfileFile -ProfilePath $profilePath
     if ($backup) { Write-Verbose "Profile backup: $backup" }
 
-    Remove-ManagedProfileBlocks -ProfilePath $profilePath
-    $legacyResult = Remove-LegacyInlineProfileShims -ProfilePath $profilePath
+    Remove-ManagedProfileBlockSet -ProfilePath $profilePath
+    $legacyResult = Remove-LegacyInlineProfileShimBlock -ProfilePath $profilePath
 
-    if (Get-Command Remove-ManagedProfileSupportFiles -CommandType Function -ErrorAction SilentlyContinue) {
-        Remove-ManagedProfileSupportFiles | Out-Null
+    if (Get-Command Remove-ManagedProfileSupportPayload -CommandType Function -ErrorAction SilentlyContinue) {
+        Remove-ManagedProfileSupportPayload | Out-Null
     }
 
     switch ($legacyResult.Status) {
