@@ -25,7 +25,7 @@ if (-not $env:CODEX_THREAD_ID -and -not $env:CODEX_INTERNAL_ORIGINATOR_OVERRIDE 
                 if (Get-Command Enable-UnixInteractiveFeatures -ErrorAction SilentlyContinue) {
                     Enable-UnixInteractiveFeatures
                 }
-                oh-my-posh init pwsh --config "$configPath" | Invoke-Expression
+                & ([scriptblock]::Create((oh-my-posh init pwsh --config "$configPath" | Out-String)))
             }
             'Lazy' {
                 $script:UnixToolsPromptState = 'Pending'
@@ -43,7 +43,7 @@ if (-not $env:CODEX_THREAD_ID -and -not $env:CODEX_INTERNAL_ORIGINATOR_OVERRIDE 
                         if (Get-Command Enable-UnixInteractiveFeatures -ErrorAction SilentlyContinue) {
                             Enable-UnixInteractiveFeatures
                         }
-                        oh-my-posh init pwsh --config "$configPath" | Invoke-Expression
+                        & ([scriptblock]::Create((oh-my-posh init pwsh --config "$configPath" | Out-String)))
                         $script:UnixToolsPromptState = 'Loaded'
                         return $true
                     }

@@ -23,6 +23,7 @@ foreach ($path in @(
         (Join-Path $privateRoot 'TerminalSetup.ps1'),
         (Join-Path $privateRoot 'ProfileMigration.ps1'),
         (Join-Path $privateRoot 'ProfileSupportInstall.ps1'),
+        (Join-Path $privateRoot 'MainOrchestration.ps1'),
         (Join-Path $publicRoot 'Invoke-EnableUnixTools.ps1')
     )) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -42,7 +43,7 @@ foreach ($path in @(
             }, $false))
 
     foreach ($functionAst in $functions) {
-        Invoke-Expression $functionAst.Extent.Text
+        . ([scriptblock]::Create($functionAst.Extent.Text))
     }
 }
 

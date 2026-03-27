@@ -26,7 +26,7 @@ function Import-ScriptFunctions {
 
         if ($functionAst) {
             $definition = $functionAst.Extent.Text -replace ("^function\s+{0}\b" -f [regex]::Escape($name)), ("function global:{0}" -f $name)
-            Invoke-Expression $definition
+            . ([scriptblock]::Create($definition))
             continue
         }
 
@@ -79,7 +79,7 @@ function Import-SourceFunctions {
         }
 
         $definition = $functionAst.Extent.Text -replace ("^function\s+{0}\b" -f [regex]::Escape($name)), ("function global:{0}" -f $name)
-        Invoke-Expression $definition
+        . ([scriptblock]::Create($definition))
     }
 }
 

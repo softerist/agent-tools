@@ -115,7 +115,7 @@ if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
 
     $zoxideExe = Resolve-SmartShellExecutable -Candidates @('zoxide.exe', 'zoxide.cmd')
     if ($zoxideExe) {
-        Invoke-Expression (& $zoxideExe init powershell --cmd j | Out-String)
+        & ([scriptblock]::Create((& $zoxideExe init powershell --cmd j | Out-String)))
     }
 
     function global:y {

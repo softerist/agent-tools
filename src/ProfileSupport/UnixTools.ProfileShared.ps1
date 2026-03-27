@@ -105,6 +105,7 @@ function Clear-UnixShimCache {
 }
 
 function Reset-UnixShimName {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param([Parameter(Mandatory = $true)][string]$Name)
 
     Remove-Item ("Alias:" + $Name) -Force -ErrorAction SilentlyContinue

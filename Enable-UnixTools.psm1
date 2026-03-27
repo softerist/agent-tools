@@ -1,5 +1,9 @@
 #Requires -Version 5.1
 
+<#
+.SYNOPSIS
+    Adds Unix-compatible tools to Windows PATH with optional shims and profile support.
+#>
 function Enable-UnixTools {
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium', PositionalBinding = $false)]
     param(

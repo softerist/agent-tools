@@ -75,6 +75,7 @@ Describe 'Publish packaging' {
             'src\Private\CommandResolution.ps1',
             'src\Private\FileIO.ps1',
             'src\Private\MainExecutionBody.ps1',
+            'src\Private\MainOrchestration.ps1',
             'src\Private\OptionalTools.ps1',
             'src\Private\ProfileSupportInstall.ps1',
             'src\ProfileSupport\UnixTools.ProfileLoader.ps1',

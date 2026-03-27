@@ -1,4 +1,4 @@
-﻿function Get-OptionalToolCommandName {
+function Get-OptionalToolCommandName {
     param([Parameter(Mandatory = $true)][object]$Tool)
 
     if ($Tool.PSObject.Properties['Command']) {

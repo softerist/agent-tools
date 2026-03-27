@@ -1,4 +1,5 @@
 function Set-UnixCommand {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][scriptblock]$Fallback
@@ -621,7 +622,6 @@ Set-UnixCommand -Name "diff" -Fallback {
 Set-UnixCommand -Name "tee" -Fallback {
     $ArgList = @($args)
     $append = $false
-    $ignoreInterrupt = $false
     $files = @()
     $parseOptions = $true
     foreach ($a in $ArgList) {
@@ -637,7 +637,7 @@ Set-UnixCommand -Name "tee" -Fallback {
             foreach ($ch in $a.Substring(1).ToCharArray()) {
                 switch ($ch) {
                     'a' { $append = $true; break }
-                    'i' { $ignoreInterrupt = $true; break }
+                    'i' { break }
                     default { Show-UnsupportedFlag -Command "tee" -Flag ("-" + $ch) -SupportedFlags "-a, -i, --" -Usage "tee [-ai] [--] <file...>" }
                 }
             }

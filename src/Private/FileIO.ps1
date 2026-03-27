@@ -1,4 +1,8 @@
-function Start-ScriptTranscript([string]$Path) {
+function Start-ScriptTranscript {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    [OutputType([bool])]
+    param([string]$Path)
+
     if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
     $resolved = [System.IO.Path]::GetFullPath($Path)
     $sensitiveRoots = @($env:WINDIR, $env:SYSTEMROOT) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
@@ -9,13 +13,16 @@ function Start-ScriptTranscript([string]$Path) {
     }
 
     $dir = Split-Path -Parent $resolved
-    Ensure-DirectoryExists -Path $dir
+    Initialize-Directory -Path $dir
 
     Start-Transcript -Path $resolved -Append -Force | Out-Null
     return $true
 }
 
 function Stop-ScriptTranscript {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param()
+
     try {
         Stop-Transcript | Out-Null
     }
@@ -24,7 +31,7 @@ function Stop-ScriptTranscript {
     }
 }
 
-function Ensure-DirectoryExists {
+function Initialize-Directory {
     param([string]$Path)
 
     if ([string]::IsNullOrWhiteSpace($Path)) { return }
@@ -46,7 +53,7 @@ function Write-AtomicTextFile {
     )
 
     $parent = Split-Path -Parent $Path
-    Ensure-DirectoryExists -Path $parent
+    Initialize-Directory -Path $parent
 
     if ($script:DryRun) {
         Write-DryRun "Write-AtomicTextFile '$Path' -Encoding $Encoding"
@@ -102,6 +109,7 @@ function Backup-ProfileFile {
 }
 
 function Set-ProfileBlock {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true)][string]$ProfilePath,
         [Parameter(Mandatory = $true)][string]$StartMarker,
@@ -136,6 +144,7 @@ function Set-ProfileBlock {
 }
 
 function Remove-ProfileBlock {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true)][string]$ProfilePath,
         [Parameter(Mandatory = $true)][string]$StartMarker,

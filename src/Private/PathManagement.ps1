@@ -1,4 +1,4 @@
-﻿function Invoke-NativeCommand {
+function Invoke-NativeCommand {
     param(
         [Parameter(Mandatory = $true)][string]$Command,
         [Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments
@@ -193,7 +193,9 @@ function Add-MachinePathEntries([string[]]$pathsToAdd) {
     return $changed
 }
 
-function Remove-MachinePathEntries([string[]]$pathsToRemove) {
+function Remove-MachinePathEntries {
+    param([string[]]$pathsToRemove)
+
     $scope = $script:PathScope
     $current = [Environment]::GetEnvironmentVariable("Path", $scope)
     if (-not $current) { return $false }
@@ -219,6 +221,8 @@ function Remove-MachinePathEntries([string[]]$pathsToRemove) {
 }
 
 function Update-MachinePathEntries {
+    param()
+
     $scope = $script:PathScope
     $current = [Environment]::GetEnvironmentVariable("Path", $scope)
     if (-not $current) { return }
@@ -237,8 +241,10 @@ function Update-MachinePathEntries {
     Set-ScopedPathValue -PathValue $newPath -Scope $scope
 }
 
-function New-DirectoryIfMissing([string]$dir) {
-    Ensure-DirectoryExists -Path $dir
+function New-DirectoryIfMissing {
+    param([string]$dir)
+
+    Initialize-Directory -Path $dir
 }
 
 function Write-ShimCmd([string]$shimDir, [string]$name, [string]$targetExePath) {
@@ -371,6 +377,8 @@ public class NativeMethods {
 }
 
 function Update-SessionPath {
+    param()
+
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
     [Environment]::GetEnvironmentVariable("Path", "User")
 }

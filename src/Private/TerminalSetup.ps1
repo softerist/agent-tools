@@ -1,4 +1,4 @@
-﻿function Save-TerminalThemes {
+function Save-TerminalThemes {
     param([Parameter(Mandatory = $true)][string]$ThemesDir)
 
     if ($script:DryRun) {
@@ -85,7 +85,7 @@ function Install-NerdFont {
         (Get-ChildItem -Path $_ -Filter "CascadiaCode*" -ErrorAction SilentlyContinue),
         (Get-ChildItem -Path $_ -Filter "CaskaydiaCove*" -ErrorAction SilentlyContinue)
     } | Where-Object { $_ -ne $null } | Select-Object -First 1
-    
+
     if ($fontFileFound) {
         Write-Status -Type ok -Label "Nerd Font" -Detail "CaskaydiaCove already installed, skipping" -Indent
         return
@@ -96,11 +96,11 @@ function Install-NerdFont {
     try {
         Write-Status -Type detail -Label "Downloading font" -Detail "ryanoasis/nerd-fonts" -Indent
         Invoke-WebRequest -Uri "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/CascadiaCode.zip" -OutFile $zip -ErrorAction Stop
-        Ensure-DirectoryExists -Path $dir
+        Initialize-Directory -Path $dir
         Expand-Archive -Path $zip -DestinationPath $dir -Force -ErrorAction Stop
-        
+
         Write-Status -Type detail -Label "Installing font" -Detail "copying to User and System Fonts (silent)" -Indent
-        
+
         $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
         $installLocations = @(
             @{ Scope = "User"; Dir = Join-Path $env:LOCALAPPDATA "Microsoft\Windows\Fonts"; Reg = "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts" }
@@ -110,14 +110,14 @@ function Install-NerdFont {
         }
 
         foreach ($loc in $installLocations) {
-            Ensure-DirectoryExists -Path $loc.Dir
+            Initialize-Directory -Path $loc.Dir
         }
-        
+
         Get-ChildItem -Path $dir -Include "*.ttf", "*.otf" -Recurse | ForEach-Object {
             $fontKeyName = $_.BaseName
             if ($_.Extension -eq ".ttf") { $fontKeyName += " (TrueType)" }
             if ($_.Extension -eq ".otf") { $fontKeyName += " (OpenType)" }
-            
+
             foreach ($loc in $installLocations) {
                 $targetPath = Join-Path $loc.Dir $_.Name
                 Copy-Item -Path $_.FullName -Destination $targetPath -Force
@@ -167,7 +167,7 @@ function Uninstall-NerdFont {
             }
         }
     }
-    
+
     if ($removedCount -gt 0) {
         Write-Status -Type ok -Label "Nerd Font" -Detail "removed $removedCount font files/registry keys" -Indent
         return $true
@@ -179,6 +179,8 @@ function Uninstall-NerdFont {
 }
 
 function Update-EditorAndTerminalFontSettings {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    [OutputType([bool])]
     param(
         [Parameter(Mandatory = $true)][string]$SettingsPath
     )
@@ -272,9 +274,12 @@ function Update-WindowsTerminalFontSettings {
 }
 
 function Set-TerminalFonts {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param()
+
     Write-Status -Type detail -Label "Configuring Editors" -Detail "injecting CaskaydiaCove NF into WT, VSCode, and Antigravity" -Indent
-    
-    $wtPaths = Get-ChildItem -Path "$env:LOCALAPPDATA\Packages" -Filter "Microsoft.WindowsTerminal*" -Directory -ErrorAction SilentlyContinue 
+
+    $wtPaths = Get-ChildItem -Path "$env:LOCALAPPDATA\Packages" -Filter "Microsoft.WindowsTerminal*" -Directory -ErrorAction SilentlyContinue
     foreach ($wtDir in $wtPaths) {
         $wtSettings = Join-Path $wtDir.FullName "LocalState\settings.json"
         Update-WindowsTerminalFontSettings -SettingsPath $wtSettings | Out-Null
@@ -289,7 +294,7 @@ function Set-TerminalFonts {
         $vscodePath = Join-Path $dir "settings.json"
         Update-EditorAndTerminalFontSettings -SettingsPath $vscodePath | Out-Null
     }
-    
+
     Write-Status -Type ok -Label "Configuration" -Detail "WT, VSCode, and Antigravity updated to use Nerd Font" -Indent
 }
 
@@ -299,7 +304,7 @@ function Install-TerminalSetup {
     )
 
     Write-Section "Terminal Setup"
-    
+
     Save-TerminalThemes -ThemesDir $ThemesDir
     Install-NerdFont
     Set-TerminalFonts

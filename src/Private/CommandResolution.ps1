@@ -1,4 +1,4 @@
-﻿function Test-GitPreferredCoreCommand {
+function Test-GitPreferredCoreCommand {
     param([Parameter(Mandatory = $true)][string]$Name)
 
     return $Name -in @('ls', 'cp', 'mv', 'rm', 'cat', 'sort')

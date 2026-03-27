@@ -5,7 +5,7 @@ Import-SourceFunctions -SourcePath (Join-Path $repoRoot 'src\Private\Output.ps1'
     'Write-DryRun'
 )
 Import-SourceFunctions -SourcePath (Join-Path $repoRoot 'src\Private\FileIO.ps1') -Names @(
-    'Ensure-DirectoryExists',
+    'Initialize-Directory',
     'Write-AtomicTextFile',
     'Write-AtomicUtf8File',
     'Write-AtomicAsciiFile'

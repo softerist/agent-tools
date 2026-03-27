@@ -1,10 +1,11 @@
-﻿function Write-Header {
+function Write-Header {
     param(
         [string]$Title = "Unix Tools for Windows",
         [string]$Version = $script:EnableUnixToolsVersion,
         [string]$Scope = $script:PathScope,
         [string]$Mode = ""
     )
+
     $ui = $script:UI
     $inner = "$Title"
     $right = "v$Version"
@@ -36,6 +37,7 @@
 
 function Write-Section {
     param([Parameter(Mandatory)][string]$Title)
+
     $ui = $script:UI
     $lineLen = [Math]::Max(50 - $Title.Length - 2, 6)
     $section = "  $($ui.HLine * 3) $Title $($ui.HLine * $lineLen)"
@@ -51,6 +53,7 @@ function Write-Status {
         [string]$Detail = "",
         [switch]$Indent
     )
+
     $ui = $script:UI
     $prefix = if ($Indent) { "    " } else { "  " }
 
@@ -87,6 +90,7 @@ function Write-Status {
 
 function Write-Dim {
     param([Parameter(Mandatory)][string]$Text, [switch]$Indent)
+
     $prefix = if ($Indent) { "      " } else { "  " }
     Write-Host "$prefix$Text" -ForegroundColor DarkGray
 }
@@ -97,7 +101,9 @@ function Write-CompactList {
         [int]$MaxWidth = 70,
         [string]$Prefix = "      "
     )
+
     if ($Items.Count -eq 0) { return }
+
     $line = $Prefix
     foreach ($item in $Items) {
         if (($line.Length + $item.Length + 1) -gt $MaxWidth -and $line.Length -gt $Prefix.Length) {
@@ -106,6 +112,7 @@ function Write-CompactList {
         }
         $line += "$item "
     }
+
     if ($line.Length -gt $Prefix.Length) {
         Write-Host $line -ForegroundColor DarkGray
     }
@@ -116,6 +123,7 @@ function Write-Footer {
         [string]$Message = "Done",
         [ValidateSet('ok', 'fail', 'warn')][string]$Type = 'ok'
     )
+
     $ui = $script:UI
     $icon = switch ($Type) {
         'ok' { $ui.Ok }
@@ -148,6 +156,7 @@ function Write-Footer {
 
 function Write-DryRun {
     param([Parameter(Mandatory)][string]$Text)
+
     Write-Host "  [DRYRUN] $Text" -ForegroundColor DarkGray
 }
 
@@ -157,6 +166,6 @@ function Write-BlankLine {
 
 function Write-AccentLine {
     param([Parameter(Mandatory)][string]$Text)
+
     Write-Host $Text -ForegroundColor DarkCyan
 }
-

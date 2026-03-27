@@ -23,6 +23,7 @@
         'src\Private\CommandResolution.ps1'
         'src\Private\FileIO.ps1'
         'src\Private\MainExecutionBody.ps1'
+        'src\Private\MainOrchestration.ps1'
         'src\Private\OptionalTools.ps1'
         'src\Private\Output.ps1'
         'src\Private\PathManagement.ps1'

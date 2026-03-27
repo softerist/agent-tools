@@ -100,6 +100,9 @@ function Write-ManagedProfileSupportFiles {
 }
 
 function Remove-ManagedProfileSupportFiles {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param()
+
     $supportRoot = Get-ManagedProfileSupportRoot
     if (-not (Test-Path -LiteralPath $supportRoot -PathType Container)) {
         return $supportRoot
@@ -207,6 +210,8 @@ function Get-ProfilePromptBlockBody {
     if ($PromptInitMode -eq 'Off') {
         return $null
     }
+
+    $null = Resolve-ProfilePromptTheme -ThemesDir $ThemesDir -Theme $Theme
 
     return @(
         "# Prompt init mode: $PromptInitMode"

@@ -227,6 +227,8 @@ function Remove-ManagedProfileBlocks {
 }
 
 function Remove-InstalledProfileShims {
+    param()
+
     $profilePath = $PROFILE.CurrentUserCurrentHost
     $backup = Backup-ProfileFile -ProfilePath $profilePath
     if ($backup) { Write-Verbose "Profile backup: $backup" }
