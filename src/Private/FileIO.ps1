@@ -19,6 +19,11 @@ function Start-ScriptTranscript {
     return $true
 }
 
+function Test-IsDryRunEnabled {
+    $dryRun = Get-Variable -Scope Script -Name DryRun -ValueOnly -ErrorAction SilentlyContinue
+    return [bool]$dryRun
+}
+
 function Stop-ScriptTranscript {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param()
@@ -37,7 +42,7 @@ function Initialize-Directory {
     if ([string]::IsNullOrWhiteSpace($Path)) { return }
     if (Test-Path -LiteralPath $Path -PathType Container) { return }
 
-    if ($script:DryRun) {
+    if (Test-IsDryRunEnabled) {
         Write-DryRun "New-Item -ItemType Directory -Path '$Path'"
         return
     }
@@ -55,7 +60,7 @@ function Write-AtomicTextFile {
     $parent = Split-Path -Parent $Path
     Initialize-Directory -Path $parent
 
-    if ($script:DryRun) {
+    if (Test-IsDryRunEnabled) {
         Write-DryRun "Write-AtomicTextFile '$Path' -Encoding $Encoding"
         return
     }
@@ -98,7 +103,7 @@ function Backup-ProfileFile {
 
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $backup = "$ProfilePath.bak-$stamp"
-    if ($script:DryRun) {
+    if (Test-IsDryRunEnabled) {
         Write-DryRun "Backup-ProfileFile: $ProfilePath -> $backup"
     }
     else {

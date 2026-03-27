@@ -1,4 +1,5 @@
-if ($script:EnableUnixToolsBootstrapLoaded) {
+$bootstrapLoaded = Get-Variable -Scope Script -Name EnableUnixToolsBootstrapLoaded -ValueOnly -ErrorAction SilentlyContinue
+if ($bootstrapLoaded) {
     return
 }
 
@@ -13,7 +14,8 @@ $script:EnableUnixToolsVersion = try {
 catch {
     '0.0.0'
 }
-if (-not $script:UI) {
+$currentUi = Get-Variable -Scope Script -Name UI -ValueOnly -ErrorAction SilentlyContinue
+if (-not $currentUi) {
     $script:UI = [pscustomobject]@{
         TL     = '+'
         TR     = '+'
