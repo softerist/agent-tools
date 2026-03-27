@@ -41,7 +41,7 @@ Describe 'Public surface and docs' {
     }
 
     It 'guards optional-tool uninstall behind the explicit uninstall switch' {
-        $scriptText = Get-Content -Path $scriptPath -Raw
+        $scriptText = Get-Content -Path (Join-Path $repoRoot 'src\Private\MainExecutionBody.ps1') -Raw
 
         ($scriptText -match 'if \(\$UninstallOptionalTools\)') | Should Be $true
         ($scriptText -match 'preserved \(use -UninstallOptionalTools to remove tracked items\)') | Should Be $true

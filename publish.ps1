@@ -430,12 +430,13 @@ function Ensure-PublishToolchain {
     }
 }
 
-function Get-ScriptVersionDefault([string]$Path) {
+function Get-ManifestVersionDefault([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return '1.0.0' }
     try {
-        $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
-        $m = [regex]::Match($raw, '\$ScriptVersion\s*=\s*"(?<v>[0-9]+\.[0-9]+\.[0-9]+)"')
-        if ($m.Success) { return $m.Groups['v'].Value }
+        $data = Import-PowerShellDataFile -Path $Path
+        if ($data.ModuleVersion) {
+            return [string]$data.ModuleVersion
+        }
     }
     catch {}
     return '1.0.0'
@@ -482,76 +483,32 @@ function New-ModulePackage {
         Set-Content -LiteralPath $aboutTarget -Value (New-AboutHelpContent -Name $Name -Description $ModuleDescription) -Encoding UTF8
     }
 
+    $sourceDir = Split-Path -Parent $SourceScript
     $psm1Path = Join-Path $moduleDir ("{0}.psm1" -f $Name)
     $manifestPath = Join-Path $moduleDir ("{0}.psd1" -f $Name)
+    $sourceWrapperPath = Join-Path $sourceDir ("{0}.psm1" -f $Name)
+    $sourceManifestPath = Join-Path $sourceDir ("{0}.psd1" -f $Name)
 
-    $sourceDir = Split-Path -Parent $SourceScript
-    $sourceBaseName = [System.IO.Path]::GetFileNameWithoutExtension($SourceScript)
-    $sourceWrapperPath = Join-Path $sourceDir ("{0}.psm1" -f $sourceBaseName)
-    if ($sourceBaseName -eq $Name -and (Test-Path -LiteralPath $sourceWrapperPath -PathType Leaf)) {
-        Copy-Item -LiteralPath $sourceWrapperPath -Destination $psm1Path -Force
+    if (-not (Test-Path -LiteralPath $sourceWrapperPath -PathType Leaf)) {
+        throw "Committed module wrapper not found: $sourceWrapperPath"
     }
-    else {
-        $wrapper = @(
-            '#Requires -Version 5.1'
-            ''
-            "function $Name {"
-            '    [CmdletBinding(PositionalBinding = $false)]'
-            '    param('
-            '        [Parameter(ValueFromRemainingArguments = $true)]'
-            '        [object[]]$ArgumentList'
-            '    )'
-            ''
-            "    `$scriptPath = Join-Path -Path `$PSScriptRoot -ChildPath '$sourceLeaf'"
-            '    if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {'
-            '        throw "Installer script not found: $scriptPath"'
-            '    }'
-            ''
-            '    & $scriptPath @ArgumentList'
-            '}'
-            ''
-            "Export-ModuleMember -Function '$Name'"
-        ) -join "`r`n"
-
-        Set-Content -LiteralPath $psm1Path -Value $wrapper -Encoding UTF8
+    if (-not (Test-Path -LiteralPath $sourceManifestPath -PathType Leaf)) {
+        throw "Committed module manifest not found: $sourceManifestPath"
     }
 
-    if (-not $ModuleTags -or $ModuleTags.Count -eq 0) {
-        $ModuleTags = @('unix', 'windows', 'path', 'shims', 'cli')
+    Copy-Item -LiteralPath $sourceWrapperPath -Destination $psm1Path -Force
+    Copy-Item -LiteralPath $sourceManifestPath -Destination $manifestPath -Force
+
+    foreach ($extraDirName in @('src', 'catalogs')) {
+        $extraDir = Join-Path $sourceDir $extraDirName
+        if (Test-Path -LiteralPath $extraDir -PathType Container) {
+            Copy-Item -LiteralPath $extraDir -Destination (Join-Path $moduleDir $extraDirName) -Recurse -Force
+        }
     }
+
     if ([string]::IsNullOrWhiteSpace($ModuleReleaseNotes)) {
         $ModuleReleaseNotes = "Published $Name $Version via publish.ps1."
     }
-    $manifestParams = @{
-        Path              = $manifestPath
-        RootModule        = ("{0}.psm1" -f $Name)
-        ModuleVersion     = $Version
-        Guid              = [guid]::NewGuid()
-        Author            = $ModuleAuthor
-        CompanyName       = $ModuleAuthor
-        Copyright         = ("(c) {0}. All rights reserved." -f $ModuleAuthor)
-        Description       = $ModuleDescription
-        PowerShellVersion = '5.1'
-        FunctionsToExport = @($Name)
-        CmdletsToExport   = @()
-        VariablesToExport = @()
-        AliasesToExport   = @()
-        FileList          = @(("{0}.psm1" -f $Name), ("{0}.psd1" -f $Name), $sourceLeaf, 'README.md', $aboutLeaf)
-        Tags              = $ModuleTags
-        ReleaseNotes      = $ModuleReleaseNotes
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($Project)) {
-        $manifestParams.ProjectUri = $Project
-    }
-    if (-not [string]::IsNullOrWhiteSpace($License)) {
-        $manifestParams.LicenseUri = $License
-    }
-    if (-not [string]::IsNullOrWhiteSpace($ModuleIconUri)) {
-        $manifestParams.IconUri = $ModuleIconUri
-    }
-
-    New-ModuleManifest @manifestParams | Out-Null
     Test-ModuleManifest -Path $manifestPath | Out-Null
 
     return [pscustomobject]@{
@@ -591,7 +548,15 @@ if ([string]::IsNullOrWhiteSpace($ModuleName)) {
 }
 
 if ([string]::IsNullOrWhiteSpace($ModuleVersion)) {
-    $ModuleVersion = Read-Default -Prompt 'Module version (SemVer)' -Default (Get-ScriptVersionDefault -Path $SourceScriptPath)
+    $manifestPath = Join-Path (Split-Path -Parent $SourceScriptPath) ("{0}.psd1" -f $ModuleName)
+    $ModuleVersion = Read-Default -Prompt 'Module version (SemVer)' -Default (Get-ManifestVersionDefault -Path $manifestPath)
+}
+else {
+    $manifestPath = Join-Path (Split-Path -Parent $SourceScriptPath) ("{0}.psd1" -f $ModuleName)
+    $manifestVersion = Get-ManifestVersionDefault -Path $manifestPath
+    if ($ModuleVersion -ne $manifestVersion) {
+        throw "Requested ModuleVersion '$ModuleVersion' does not match committed manifest version '$manifestVersion'. Update $manifestPath first."
+    }
 }
 
 if ([string]::IsNullOrWhiteSpace($Author)) {

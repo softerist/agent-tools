@@ -27,10 +27,11 @@ function Enable-UnixTools {
         [object[]]$ArgumentList
     )
 
-    $scriptPath = Join-Path -Path $PSScriptRoot -ChildPath 'Enable-UnixTools.ps1'
-    if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
-        throw "Installer script not found: $scriptPath"
+    $bootstrapPath = Join-Path -Path $PSScriptRoot -ChildPath 'src\Private\Bootstrap.ps1'
+    if (-not (Test-Path -LiteralPath $bootstrapPath -PathType Leaf)) {
+        throw "Bootstrap script not found: $bootstrapPath"
     }
+    . $bootstrapPath
 
     $wrapperHandlesShouldProcess = $PSBoundParameters.ContainsKey('WhatIf') -or $PSBoundParameters.ContainsKey('Confirm')
     if ($wrapperHandlesShouldProcess) {
@@ -52,7 +53,7 @@ function Enable-UnixTools {
         $invokeParams[$entry.Key] = $entry.Value
     }
 
-    & $scriptPath @invokeParams @ArgumentList
+    Invoke-EnableUnixTools @invokeParams @ArgumentList
 }
 
 Export-ModuleMember -Function 'Enable-UnixTools'

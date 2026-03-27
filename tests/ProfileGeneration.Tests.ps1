@@ -12,14 +12,19 @@ Import-ScriptFunctions -ScriptPath $scriptPath -Names @(
 )
 
 Describe 'Generated profile blocks' {
-    It 'uses command-aware executable priority in generated profile shims' {
-        $scriptText = Get-Content -Raw -Path $scriptPath
+    It 'uses shared command-resolution helpers in managed profile support scripts' {
+        $shared = Get-Content -Raw -Path (Join-Path $repoRoot 'src\ProfileSupport\UnixTools.ProfileShared.ps1')
+        $missing = Get-Content -Raw -Path (Join-Path $repoRoot 'src\ProfileSupport\UnixTools.MissingShims.ps1')
+        $aliasCompat = Get-Content -Raw -Path (Join-Path $repoRoot 'src\ProfileSupport\UnixTools.AliasCompat.ps1')
+        $smartShell = Get-Content -Raw -Path (Join-Path $repoRoot 'src\ProfileSupport\UnixTools.SmartShell.ps1')
 
-        ([regex]::Matches($scriptText, [regex]::Escape("Get-Command `$Name -CommandType Application -All -ErrorAction SilentlyContinue")).Count -ge 2) | Should Be $true
-        ([regex]::Matches($scriptText, [regex]::Escape("function Get-UnixShimSourcePriority {")).Count -ge 2) | Should Be $true
-        ([regex]::Matches($scriptText, [regex]::Escape("Sort-Object @{ Expression = { Get-UnixShimSourcePriority -Source `$_.Source -Name `$Name } }, @{ Expression = { `$_.Source } }")).Count -ge 2) | Should Be $true
-        ([regex]::Matches($scriptText, [regex]::Escape("Where-Object { `$_.Source -and [System.IO.Path]::GetExtension(`$_.Source) -eq '.exe' }")).Count -ge 2) | Should Be $true
-        ([regex]::Matches($scriptText, [regex]::Escape("Where-Object { `$_.Source -match '\.exe$' -and `$_.Source -notmatch '\\Git\\shims\\' }")).Count) | Should Be 0
+        ($shared -match 'function Get-PreferredApplicationCommand') | Should Be $true
+        ($shared -match 'function Get-UnixShimExecutable') | Should Be $true
+        ($missing -match 'Get-UnixShimExecutable -Name \$commandName') | Should Be $true
+        ($aliasCompat -match 'Get-UnixShimExecutable -Name \$commandName') | Should Be $true
+        ($smartShell -match 'Get-PreferredApplicationCommand -Name \$candidate') | Should Be $true
+        ($missing -match 'function Test-GitPreferredCoreCommand') | Should Be $false
+        ($aliasCompat -match 'function Test-GitPreferredCoreCommand') | Should Be $false
     }
 
     It 'suppresses optional module import noise in the smart-shell block' {
@@ -38,11 +43,10 @@ Describe 'Generated profile blocks' {
     It 'builds a fast smart-shell block with deferred interactive features' {
         $block = Get-ProfileSmartShellBlockBody -StartupMode Fast
 
-        ($block -match 'function global:Enable-UnixInteractiveFeatures') | Should Be $true
-        ($block -match '(?m)^\s*Enable-UnixInteractiveFeatures\s*$') | Should Be $false
-        ($block -match 'PSScriptAnalyzer') | Should Be $false
+        ($block -match 'function Enable-UnixInteractiveFeatures') | Should Be $true
+        ($block -match "StartupMode -eq 'Legacy'") | Should Be $true
         ($block -match 'Set-PSReadLineOption -PredictionSource History') | Should Be $true
-        ($block -match 'if \(-not \(Get-Module PSReadLine -ErrorAction SilentlyContinue\)\) \{\s*Import-Module PSReadLine -ErrorAction SilentlyContinue\s*\}') | Should Be $true
+        ($block -match 'Import-Module \$module -ErrorAction SilentlyContinue -WarningAction SilentlyContinue 2>\$null 3>\$null \| Out-Null') | Should Be $true
     }
 
     It 'builds a legacy smart-shell block that eagerly enables interactive features' {
@@ -69,7 +73,7 @@ Describe 'Generated profile blocks' {
         ($block -match '# Prompt init mode: Eager') | Should Be $true
         ($block -match 'CODEX_INTERNAL_ORIGINATOR_OVERRIDE') | Should Be $true
         ($block -match 'ANTIGRAVITY_CLI_ALIAS') | Should Be $true
-        ($block -match "UnixToolsPromptState = 'Pending'") | Should Be $false
+        ($block -match '\$script:UnixToolsProfileConfig\.PromptInitMode') | Should Be $true
     }
 
     It 'returns no prompt block when prompt mode is off' {
