@@ -178,7 +178,7 @@ try {
 
         if ($UninstallOptionalTools) {
             if ($PSCmdlet.ShouldProcess("Optional tools", "Uninstall optional tools previously installed by this script")) {
-                $removedOptional = Uninstall-TrackedOptionalTools
+                $removedOptional = Uninstall-TrackedOptionalToolSet
                 if ($removedOptional -gt 0) {
                     $didChange = $true
                     Write-Status -Type ok -Label "Optional items removed" -Detail "$removedOptional item(s)"
@@ -259,8 +259,8 @@ try {
                     $_.ModuleName -and (Get-Module -ListAvailable ([string]$_.ModuleName))
                 } | ForEach-Object { [string]$_.ModuleName })
 
-            $installedOptional = @(Install-MissingOptionalTools -Catalog $optionalToolCatalog)
-            $installedOptionalModules = @(Install-MissingOptionalPowerShellModules -Catalog $optionalModuleCatalog)
+            $installedOptional = @(Install-MissingOptionalToolSet -Catalog $optionalToolCatalog)
+            $installedOptionalModules = @(Install-MissingOptionalPowerShellModuleSet -Catalog $optionalModuleCatalog)
             Update-SessionPath
 
             $presentAfter = @($optionalToolCatalog | Where-Object {
@@ -327,8 +327,6 @@ try {
         else {
             Write-Status -Type skip -Label "Optional tools" -Detail "skipped by -WhatIf/-Confirm"
         }
-    }
-    else {
     }
 
     if ($CreateShims) {
@@ -455,7 +453,7 @@ try {
             catch {
                 Write-Status -Type warn -Label "Profile reload failed" -Detail $_.Exception.Message
             }
-            Write-Status -Type ok -Label "Profile shims written" -Detail "missing-command + alias-compat + smart-shell ($ProfileStartupMode / $PromptInitMode)"
+            Write-Status -Type ok -Label "Profile shims written" -Detail "managed loader + support files ($ProfileStartupMode / $PromptInitMode)"
             $didChange = $true
         }
         else {

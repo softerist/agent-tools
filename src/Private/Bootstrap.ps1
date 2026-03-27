@@ -6,6 +6,13 @@ $privateRoot = $PSScriptRoot
 $publicRoot = Join-Path (Split-Path $PSScriptRoot -Parent) 'Public'
 $script:EnableUnixToolsSourceRoot = Split-Path $PSScriptRoot -Parent
 $script:EnableUnixToolsRepoRoot = Split-Path $script:EnableUnixToolsSourceRoot -Parent
+$script:EnableUnixToolsManifestPath = Join-Path $script:EnableUnixToolsRepoRoot 'Enable-UnixTools.psd1'
+$script:EnableUnixToolsVersion = try {
+    [string](Import-PowerShellDataFile -Path $script:EnableUnixToolsManifestPath).ModuleVersion
+}
+catch {
+    '0.0.0'
+}
 
 foreach ($path in @(
         (Join-Path $privateRoot 'Output.ps1'),
@@ -16,7 +23,6 @@ foreach ($path in @(
         (Join-Path $privateRoot 'FileIO.ps1'),
         (Join-Path $privateRoot 'ProfileMigration.ps1'),
         (Join-Path $privateRoot 'ProfileSupportInstall.ps1'),
-        (Join-Path $privateRoot 'MainOrchestration.ps1'),
         (Join-Path $publicRoot 'Invoke-EnableUnixTools.ps1')
     )) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {

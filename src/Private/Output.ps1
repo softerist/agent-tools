@@ -1,7 +1,7 @@
 ﻿function Write-Header {
     param(
         [string]$Title = "Unix Tools for Windows",
-        [string]$Version = $ScriptVersion,
+        [string]$Version = $script:EnableUnixToolsVersion,
         [string]$Scope = $script:PathScope,
         [string]$Mode = ""
     )

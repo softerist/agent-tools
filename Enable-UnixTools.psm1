@@ -18,7 +18,7 @@ function Enable-UnixTools {
         [string]$Theme = 'lightgreen',
         [string]$ThemesDir,
         [ValidateSet('Fast', 'Legacy')][string]$ProfileStartupMode = 'Fast',
-        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Lazy',
+        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Eager',
         [string]$LogPath,
         [Alias('h')]
         [switch]$Help,

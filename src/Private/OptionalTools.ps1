@@ -90,7 +90,7 @@ function Get-OptionalPowerShellModuleCatalog {
     return @(Read-CatalogJson -Name 'optional-modules.json')
 }
 
-function Get-SmartShellOptionalModuleNames {
+function Get-SmartShellOptionalModuleNameSet {
     return @(Get-OptionalPowerShellModuleCatalog | Select-Object -ExpandProperty ModuleName)
 }
 
@@ -129,7 +129,7 @@ function Write-OptionalToolState([object[]]$Records) {
     $stateDir = Split-Path -Parent $statePath
     if ($stateDir -and -not (Test-Path $stateDir)) {
         if ($script:DryRun) {
-            Write-Host "[DRYRUN] New-Item -ItemType Directory -Path '$stateDir'" -ForegroundColor DarkGray
+            Write-DryRun "New-Item -ItemType Directory -Path '$stateDir'"
         }
         else {
             New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
@@ -139,7 +139,7 @@ function Write-OptionalToolState([object[]]$Records) {
     if (-not $Records -or $Records.Count -eq 0) {
         if (Test-Path $statePath) {
             if ($script:DryRun) {
-                Write-Host "[DRYRUN] Remove-Item -Path '$statePath'" -ForegroundColor DarkGray
+                Write-DryRun "Remove-Item -Path '$statePath'"
             }
             else {
                 Remove-Item -Path $statePath -Force -ErrorAction SilentlyContinue
@@ -152,7 +152,7 @@ function Write-OptionalToolState([object[]]$Records) {
     Write-AtomicUtf8File -Path $statePath -Content $json
 }
 
-function Install-MissingOptionalPowerShellModules([object[]]$Catalog) {
+function Install-MissingOptionalPowerShellModuleSet([object[]]$Catalog) {
     if (-not $Catalog -or $Catalog.Count -eq 0) { return @() }
 
     $psResource = Get-Command Install-PSResource -ErrorAction SilentlyContinue
@@ -215,7 +215,7 @@ function Install-MissingOptionalPowerShellModules([object[]]$Catalog) {
                 Manager       = $managerUsed
                 PackageId     = $moduleName
                 InstalledAt   = (Get-Date).ToString("o")
-                ScriptVersion = $ScriptVersion
+                ScriptVersion = $script:EnableUnixToolsVersion
             }
             Write-Status -Type ok -Label "Module installed" -Detail "$moduleName via $managerUsed" -Indent
         }
@@ -251,7 +251,7 @@ function Install-MissingOptionalPowerShellModules([object[]]$Catalog) {
     return $newlyInstalled
 }
 
-function Install-MissingOptionalTools([object[]]$Catalog) {
+function Install-MissingOptionalToolSet([object[]]$Catalog) {
     if (-not $Catalog -or $Catalog.Count -eq 0) { return @() }
 
     $pmProbe = @(Initialize-OptionalPackageManagers)
@@ -364,7 +364,7 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
                 Manager       = $managerUsed
                 PackageId     = $packageIdUsed
                 InstalledAt   = (Get-Date).ToString("o")
-                ScriptVersion = $ScriptVersion
+                ScriptVersion = $script:EnableUnixToolsVersion
             }
             Write-Status -Type ok -Label "Installed" -Detail "$toolLabel via $managerUsed" -Indent
         }
@@ -415,7 +415,7 @@ function Install-MissingOptionalTools([object[]]$Catalog) {
     return $newlyInstalled
 }
 
-function Uninstall-TrackedOptionalTools {
+function Uninstall-TrackedOptionalToolSet {
     $tracked = @(Read-OptionalToolState)
     if ($tracked.Count -eq 0) { return 0 }
 
@@ -423,7 +423,6 @@ function Uninstall-TrackedOptionalTools {
     $remaining = @()
     foreach ($item in $tracked) {
         $kind = if ($item.PSObject.Properties["Kind"]) { [string]$item.Kind } else { "" }
-        $commandName = Get-OptionalToolCommandName -Tool $item
         $toolLabel = Get-OptionalToolDisplayName -Tool $item
         $moduleName = if ($item.PSObject.Properties["ModuleName"]) { [string]$item.ModuleName } else { "" }
         $manager = [string]$item.Manager
@@ -439,10 +438,10 @@ function Uninstall-TrackedOptionalTools {
             try {
                 if ($script:DryRun) {
                     if ($manager -eq "psresourceget") {
-                        Write-Host "[DRYRUN] Uninstall-PSResource $moduleName" -ForegroundColor DarkGray
+                        Write-DryRun "Uninstall-PSResource $moduleName"
                     }
                     else {
-                        Write-Host "[DRYRUN] Uninstall-Module $moduleName -AllVersions -Force" -ForegroundColor DarkGray
+                        Write-DryRun "Uninstall-Module $moduleName -AllVersions -Force"
                     }
                     $ok = $true
                 }
@@ -480,9 +479,9 @@ function Uninstall-TrackedOptionalTools {
                 if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
                     break
                 }
-                Write-Host "  [INFO] Uninstalling optional tool: $toolLabel via winget ($packageId)..." -ForegroundColor DarkGray
+                Write-Dim "Uninstalling optional tool: $toolLabel via winget ($packageId)..."
                 if ($script:DryRun) {
-                    Write-Host "[DRYRUN] winget uninstall --id $packageId ..." -ForegroundColor DarkGray
+                    Write-DryRun "winget uninstall --id $packageId ..."
                     $exitCode = 0
                 }
                 else {
@@ -495,9 +494,9 @@ function Uninstall-TrackedOptionalTools {
                 if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
                     break
                 }
-                Write-Host "  [INFO] Uninstalling optional tool: $toolLabel via choco ($packageId)..." -ForegroundColor DarkGray
+                Write-Dim "Uninstalling optional tool: $toolLabel via choco ($packageId)..."
                 if ($script:DryRun) {
-                    Write-Host "[DRYRUN] choco uninstall $packageId -y" -ForegroundColor DarkGray
+                    Write-DryRun "choco uninstall $packageId -y"
                     $exitCode = 0
                 }
                 else {
@@ -513,7 +512,7 @@ function Uninstall-TrackedOptionalTools {
 
         if ($ok) {
             $removedCount++
-            Write-Host "  [OK] Removed optional tool: $toolLabel" -ForegroundColor Green
+            Write-Status -Type ok -Label "Optional tool removed" -Detail $toolLabel
         }
         else {
             $remaining += $item

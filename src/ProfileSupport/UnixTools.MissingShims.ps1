@@ -773,7 +773,6 @@ Add-UnixShimIfMissing -Name "sum" -Body {
 }
 
 Add-UnixShimIfMissing -Name "pv" -Body {
-    $ArgList = @($args)
     $count = 0L
     $start = Get-Date
     foreach ($item in $input) {
@@ -782,7 +781,7 @@ Add-UnixShimIfMissing -Name "pv" -Body {
         $item
     }
     $elapsed = (Get-Date) - $start
-    Write-Host ("[pv fallback] transferred {0} bytes in {1:n2}s" -f $count, $elapsed.TotalSeconds) -ForegroundColor DarkGray
+    Write-Information ("[pv fallback] transferred {0} bytes in {1:n2}s" -f $count, $elapsed.TotalSeconds) -InformationAction Continue
 }
 
 Add-UnixShimIfMissing -Name "pr" -Body {

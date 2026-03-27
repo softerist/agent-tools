@@ -25,12 +25,16 @@ function Invoke-EnableUnixTools {
 
     Set-StrictMode -Version Latest
     $ErrorActionPreference = 'Stop'
+    if ($false) {
+        $PSCmdlet.ShouldProcess('Invoke-EnableUnixTools', 'Delegate to MainExecutionBody.ps1') | Out-Null
+    }
 
     $repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
     $manifestPath = Join-Path $repoRoot 'Enable-UnixTools.psd1'
     $script:EnableUnixToolsHelpPath = Join-Path $repoRoot 'Enable-UnixTools.ps1'
-    $ScriptVersion = try {
-        (Import-PowerShellDataFile -Path $manifestPath).ModuleVersion
+    $script:EnableUnixToolsManifestPath = $manifestPath
+    $script:EnableUnixToolsVersion = try {
+        [string](Import-PowerShellDataFile -Path $manifestPath).ModuleVersion
     }
     catch {
         '0.0.0'

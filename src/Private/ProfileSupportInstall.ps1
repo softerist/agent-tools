@@ -61,7 +61,7 @@ function New-ProfileSupportConfigText {
 
     return @"
 @{
-    Version        = '$ScriptVersion'
+    Version        = '$($script:EnableUnixToolsVersion)'
     StartupMode    = '$StartupMode'
     PromptInitMode = '$PromptMode'
     Theme          = '$escapedTheme'

@@ -48,7 +48,6 @@ function Assert-Admin {
             Write-Warning "Running in UserScope mode (admin not required)."
         }
         return $true
-        return $true
     }
     if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         if ($script:DryRun) {

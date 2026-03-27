@@ -4,7 +4,7 @@ $scriptPath = Join-Path $repoRoot 'Enable-UnixTools.ps1'
 
 Import-ScriptFunctions -ScriptPath $scriptPath -Names @(
     'Get-OptionalPowerShellModuleCatalog',
-    'Get-SmartShellOptionalModuleNames',
+    'Get-SmartShellOptionalModuleNameSet',
     'Get-ProfileSmartShellBlockBody',
     'Resolve-ProfilePromptTheme',
     'Get-ProfilePromptBlockBody',

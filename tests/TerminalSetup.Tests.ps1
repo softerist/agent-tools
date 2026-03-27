@@ -14,6 +14,8 @@ function global:Write-Status {
         [string]$Detail,
         [switch]$Indent
     )
+
+    $null = $Type, $Label, $Detail, $Indent
 }
 
 Describe 'Terminal setup' {

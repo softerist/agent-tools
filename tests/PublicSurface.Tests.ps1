@@ -25,6 +25,14 @@ Describe 'Public surface and docs' {
         ((@($wrapperParameters | Sort-Object)) -join ',') | Should Be (($expectedParameters) -join ',')
     }
 
+    It 'keeps the module wrapper prompt default aligned with the script entrypoint' {
+        $moduleText = Get-Content -Path (Join-Path $repoRoot 'Enable-UnixTools.psm1') -Raw
+        $scriptText = Get-Content -Path $scriptPath -Raw
+
+        ($scriptText -match "PromptInitMode = 'Eager'") | Should Be $true
+        ($moduleText -match "PromptInitMode = 'Eager'") | Should Be $true
+    }
+
     It 'does not include PSScriptAnalyzer in optional shell modules' {
         $moduleNames = @(Get-OptionalPowerShellModuleCatalog | Select-Object -ExpandProperty ModuleName)
         ($moduleNames -contains 'PSScriptAnalyzer') | Should Be $false
