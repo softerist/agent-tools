@@ -17,19 +17,19 @@ catch {
 $currentUi = Get-Variable -Scope Script -Name UI -ValueOnly -ErrorAction SilentlyContinue
 if (-not $currentUi) {
     $script:UI = [pscustomobject]@{
-        TL     = '+'
-        TR     = '+'
-        BL     = '+'
-        BR     = '+'
-        HLine  = '-'
-        VLine  = '|'
-        Ok     = '+'
-        Fail   = 'x'
-        Info   = 'i'
-        Detail = '>'
-        Warn   = '!'
-        Skip   = '-'
-        Arrow  = '->'
+        TL     = [char]0x250C # ┌
+        TR     = [char]0x2510 # ┐
+        BL     = [char]0x2514 # └
+        BR     = [char]0x2518 # ┘
+        HLine  = [char]0x2500 # ─
+        VLine  = [char]0x2502 # │
+        Ok     = [char]0x2714 # ✔
+        Fail   = [char]0x2716 # ✖
+        Info   = [char]0x2139 # ℹ
+        Detail = [char]0x203A # ›
+        Warn   = [char]0x26A0 # ⚠
+        Skip   = [char]0x21B7 # ↷
+        Arrow  = [char]0x2192 # →
     }
 }
 
