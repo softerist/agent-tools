@@ -13,6 +13,23 @@ $script:EnableUnixToolsVersion = try {
 catch {
     '0.0.0'
 }
+if (-not $script:UI) {
+    $script:UI = [pscustomobject]@{
+        TL     = '+'
+        TR     = '+'
+        BL     = '+'
+        BR     = '+'
+        HLine  = '-'
+        VLine  = '|'
+        Ok     = '+'
+        Fail   = 'x'
+        Info   = 'i'
+        Detail = '>'
+        Warn   = '!'
+        Skip   = '-'
+        Arrow  = '->'
+    }
+}
 
 foreach ($path in @(
         (Join-Path $privateRoot 'Output.ps1'),

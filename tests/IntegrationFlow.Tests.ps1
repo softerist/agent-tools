@@ -1,0 +1,199 @@
+$repoRoot = Split-Path $PSScriptRoot -Parent
+$modulePath = Join-Path $repoRoot 'Enable-UnixTools.psd1'
+$publishPath = Join-Path $repoRoot 'publish.ps1'
+. (Join-Path $PSScriptRoot 'Support\TestHelpers.ps1')
+
+Import-ScriptFunction -ScriptPath $publishPath -Names @(
+    'Get-DefaultReadmeContent',
+    'Get-DefaultAboutHelpContent',
+    'Initialize-ModulePackage'
+)
+
+Import-ScriptFunction -ScriptPath $modulePath -Names @(
+    'Get-ManagedProfileSupportFileNameList',
+    'Get-ProfileInstallationState',
+    'Install-ProfileInlineSupport',
+    'Remove-InstalledProfileSupport'
+)
+
+function New-IntegrationUserState {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Integration test helper provisions isolated temporary user state.')]
+    param()
+
+    $root = Join-Path ([System.IO.Path]::GetTempPath()) ('agent-tools-int-' + [guid]::NewGuid())
+    $localAppData = Join-Path $root 'LocalAppData'
+    $userProfile = Join-Path $root 'UserProfile'
+    $appData = Join-Path $root 'AppData'
+    $documentsDir = Join-Path $root 'Documents\PowerShell'
+    $profilePath = Join-Path $documentsDir 'Microsoft.PowerShell_profile.ps1'
+
+    foreach ($dir in @($localAppData, $userProfile, $appData, $documentsDir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+
+    return [pscustomobject]@{
+        Root        = $root
+        LocalAppData = $localAppData
+        UserProfile = $userProfile
+        AppData     = $appData
+        ProfilePath = $profilePath
+        SupportRoot = Join-Path $localAppData 'UnixToolsSystemWide\profile'
+    }
+}
+
+function Invoke-WithTemporaryUserState {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidGlobalVars', '', Justification = 'Integration tests intentionally swap PROFILE to isolate user state.')]
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$ScriptBlock
+    )
+
+    $state = New-IntegrationUserState
+    $originalProfile = $global:PROFILE
+    $originalLocalAppData = $env:LOCALAPPDATA
+    $originalUserProfile = $env:USERPROFILE
+    $originalAppData = $env:APPDATA
+    $originalPath = $env:Path
+
+    try {
+        $env:LOCALAPPDATA = $state.LocalAppData
+        $env:USERPROFILE = $state.UserProfile
+        $env:APPDATA = $state.AppData
+        $global:PROFILE = [pscustomobject]@{
+            CurrentUserCurrentHost = $state.ProfilePath
+        }
+
+        & $ScriptBlock $state
+    }
+    finally {
+        $env:LOCALAPPDATA = $originalLocalAppData
+        $env:USERPROFILE = $originalUserProfile
+        $env:APPDATA = $originalAppData
+        $env:Path = $originalPath
+        $global:PROFILE = $originalProfile
+        Remove-Module Enable-UnixTools -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $state.Root -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Initialize-IntegrationState {
+    $script:PathScope = 'User'
+    $script:PathDisplay = 'User PATH'
+    $script:DryRun = $false
+    Remove-Variable -Scope Script -Name ProfileBackupPath -ErrorAction SilentlyContinue
+}
+
+Describe 'Integration flows' {
+    It 'imports the module and keeps the compatibility alias aligned with the singular function' {
+        Remove-Module Enable-UnixTools -Force -ErrorAction SilentlyContinue
+        Import-Module $modulePath -Force
+
+        $aliasCommand = Get-Command Enable-UnixTools
+        $functionCommand = Get-Command Enable-UnixTool
+        $commonParameters = @(
+            'Confirm', 'Debug', 'ErrorAction', 'ErrorVariable',
+            'InformationAction', 'InformationVariable', 'OutBuffer', 'OutVariable',
+            'PipelineVariable', 'ProgressAction', 'Verbose', 'WarningAction',
+            'WarningVariable', 'WhatIf'
+        )
+
+        $aliasCommand.CommandType | Should Be 'Alias'
+        $aliasCommand.ResolvedCommandName | Should Be 'Enable-UnixTool'
+        $functionCommand.CommandType | Should Be 'Function'
+
+        $aliasParameters = @($aliasCommand.Parameters.Keys | Where-Object { $_ -notin $commonParameters } | Sort-Object)
+        $functionParameters = @($functionCommand.Parameters.Keys | Where-Object { $_ -notin $commonParameters } | Sort-Object)
+        (($aliasParameters) -join ',') | Should Be (($functionParameters) -join ',')
+    }
+
+    It 'does not materialize profile support when install is invoked with WhatIf through the module alias' {
+        Invoke-WithTemporaryUserState {
+            param($state)
+
+            Import-Module $modulePath -Force
+
+            Enable-UnixTools -UserScope -InstallProfileShims -PromptInitMode Off -WhatIf
+
+            (Test-Path -LiteralPath $state.ProfilePath -PathType Leaf) | Should Be $false
+            (Test-Path -LiteralPath $state.SupportRoot -PathType Container) | Should Be $false
+        }
+    }
+
+    It 'preserves profile support during DryRun uninstall through the module function' {
+        Invoke-WithTemporaryUserState {
+            param($state)
+
+            $profileText = @'
+# >>> unix-tools-profile >>>
+# Startup mode: Fast
+# Prompt init mode: Off
+# Support root: TEMP
+. 'TEMP\UnixTools.ProfileLoader.ps1'
+# <<< unix-tools-profile <<<
+'@ -replace 'TEMP', [regex]::Escape($state.SupportRoot).Replace('\\', '\')
+            Set-Content -Path $state.ProfilePath -Value $profileText -Encoding UTF8
+            New-Item -ItemType Directory -Path $state.SupportRoot -Force | Out-Null
+            Set-Content -Path (Join-Path $state.SupportRoot 'UnixTools.ProfileLoader.ps1') -Value '# loader' -Encoding UTF8
+
+            $beforeProfile = Get-Content -Path $state.ProfilePath -Raw
+
+            Import-Module $modulePath -Force
+            Enable-UnixTool -UserScope -Uninstall -DryRun
+
+            (Get-Content -Path $state.ProfilePath -Raw) | Should Be $beforeProfile
+            (Test-Path -LiteralPath (Join-Path $state.SupportRoot 'UnixTools.ProfileLoader.ps1') -PathType Leaf) | Should Be $true
+        }
+    }
+
+    It 'installs and removes managed profile support against isolated user state' {
+        Invoke-WithTemporaryUserState {
+            param($state)
+
+            Initialize-IntegrationState
+
+            Install-ProfileInlineSupport -ThemesDir (Join-Path $state.Root 'Themes') -Theme 'lightgreen' -StartupMode Fast -PromptMode Off | Out-Null
+
+            $installedState = Get-ProfileInstallationState -ProfilePath $state.ProfilePath
+            $installedState.HasManagedBlocks | Should Be $true
+            $installedState.StartupMode | Should Be 'Fast'
+            $installedState.PromptInitMode | Should Be 'Off'
+
+            foreach ($fileName in Get-ManagedProfileSupportFileNameList) {
+                (Test-Path -LiteralPath (Join-Path $state.SupportRoot $fileName) -PathType Leaf) | Should Be $true
+            }
+
+            Remove-InstalledProfileSupport | Out-Null
+
+            $removedState = Get-ProfileInstallationState -ProfilePath $state.ProfilePath
+            $removedState.HasManagedBlocks | Should Be $false
+            (Test-Path -LiteralPath $state.SupportRoot -PathType Container) | Should Be $false
+        }
+    }
+
+    It 'imports the staged package and exposes both commands without regenerating behavior drift' {
+        $manifest = Import-PowerShellDataFile -Path $modulePath
+        $package = Initialize-ModulePackage `
+            -SourceScript (Join-Path $repoRoot 'Enable-UnixTools.ps1') `
+            -Name 'Enable-UnixTools' `
+            -Version ([string]$manifest.ModuleVersion) `
+            -ModuleDescription 'integration smoke'
+
+        try {
+            Invoke-WithTemporaryUserState {
+                param($state)
+
+                Import-Module (Join-Path $package.ModulePath 'Enable-UnixTools.psd1') -Force
+
+                (Get-Command Enable-UnixTool).CommandType | Should Be 'Function'
+                (Get-Command Enable-UnixTools).ResolvedCommandName | Should Be 'Enable-UnixTool'
+
+                Enable-UnixTools -UserScope -InstallProfileShims -PromptInitMode Off -WhatIf
+
+                (Test-Path -LiteralPath $state.ProfilePath -PathType Leaf) | Should Be $false
+                (Test-Path -LiteralPath $state.SupportRoot -PathType Container) | Should Be $false
+            }
+        }
+        finally {
+            Remove-Item -LiteralPath $package.StagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}

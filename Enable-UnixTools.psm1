@@ -57,7 +57,12 @@ function Enable-UnixTool {
         $invokeParams[$entry.Key] = $entry.Value
     }
 
-    Invoke-UnixToolSetup @invokeParams @ArgumentList
+    if ($ArgumentList -and $ArgumentList.Count -gt 0) {
+        Invoke-UnixToolSetup @invokeParams @ArgumentList
+        return
+    }
+
+    Invoke-UnixToolSetup @invokeParams
 }
 
 Set-Alias -Name 'Enable-UnixTools' -Value 'Enable-UnixTool'

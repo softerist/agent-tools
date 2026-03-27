@@ -29,7 +29,12 @@ function Invoke-UnixToolSetup {
         $PSCmdlet.ShouldProcess('Invoke-UnixToolSetup', 'Delegate to MainExecutionBody.ps1') | Out-Null
     }
 
-    $repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+    $repoRoot = if ($script:EnableUnixToolsRepoRoot) {
+        $script:EnableUnixToolsRepoRoot
+    }
+    else {
+        Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+    }
     $manifestPath = Join-Path $repoRoot 'Enable-UnixTools.psd1'
     $script:EnableUnixToolsHelpPath = Join-Path $repoRoot 'Enable-UnixTools.ps1'
     $script:EnableUnixToolsManifestPath = $manifestPath
@@ -56,7 +61,13 @@ function Invoke-UnixToolSetup {
         $ConfirmPreference = 'None'
     }
 
-    $mainExecutionPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'Private\MainExecutionBody.ps1'
+    $sourceRoot = if ($script:EnableUnixToolsSourceRoot) {
+        $script:EnableUnixToolsSourceRoot
+    }
+    else {
+        Split-Path $PSScriptRoot -Parent
+    }
+    $mainExecutionPath = Join-Path $sourceRoot 'Private\MainExecutionBody.ps1'
     if (-not (Test-Path -LiteralPath $mainExecutionPath -PathType Leaf)) {
         throw "Main execution body not found: $mainExecutionPath"
     }

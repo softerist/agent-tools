@@ -93,7 +93,8 @@ function Backup-ProfileFile {
     param([Parameter(Mandatory = $true)][string]$ProfilePath)
 
     if (-not (Test-Path -LiteralPath $ProfilePath -PathType Leaf)) { return $null }
-    if ($script:ProfileBackupPath) { return $script:ProfileBackupPath }
+    $existingBackupPath = Get-Variable -Scope Script -Name ProfileBackupPath -ValueOnly -ErrorAction SilentlyContinue
+    if ($existingBackupPath) { return $existingBackupPath }
 
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $backup = "$ProfilePath.bak-$stamp"
