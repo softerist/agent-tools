@@ -1,6 +1,9 @@
 function Get-ProfileSupportTemplateRoot {
-    $srcRoot = if ($script:EnableUnixToolsSourceRoot) {
-        $script:EnableUnixToolsSourceRoot
+    param([psobject]$RuntimeContext)
+
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    $srcRoot = if (-not [string]::IsNullOrWhiteSpace($RuntimeContext.SourceRoot)) {
+        $RuntimeContext.SourceRoot
     }
     elseif ($PSScriptRoot) {
         Split-Path $PSScriptRoot -Parent
@@ -13,7 +16,10 @@ function Get-ProfileSupportTemplateRoot {
 }
 
 function Get-ManagedProfileSupportRoot {
-    $base = if ($script:PathScope -eq 'User') {
+    param([psobject]$RuntimeContext)
+
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    $base = if ($RuntimeContext.PathScope -eq 'User') {
         if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:USERPROFILE }
     }
     else {
@@ -36,9 +42,12 @@ function Get-ManagedProfileSupportFileNameList {
 }
 
 function Read-ProfileSupportTemplate {
-    param([Parameter(Mandatory = $true)][string]$Name)
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [psobject]$RuntimeContext
+    )
 
-    $templatePath = Join-Path (Get-ProfileSupportTemplateRoot) $Name
+    $templatePath = Join-Path (Get-ProfileSupportTemplateRoot -RuntimeContext $RuntimeContext) $Name
     if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) {
         throw "Profile support template not found: $templatePath"
     }
@@ -53,8 +62,11 @@ function New-ProfileSupportConfigText {
         [Parameter(Mandatory = $true)][string]$StartupMode,
         [Parameter(Mandatory = $true)][string]$PromptMode,
         [string]$Theme = 'lightgreen',
-        [string]$ThemesDir = ''
+        [string]$ThemesDir = '',
+        [psobject]$RuntimeContext
     )
+
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
 
     $escapedSupportRoot = $SupportRoot.Replace("'", "''")
     $escapedTheme = ([string]$Theme).Replace("'", "''")
@@ -62,12 +74,12 @@ function New-ProfileSupportConfigText {
 
     return @"
 @{
-    Version        = '$($script:EnableUnixToolsVersion)'
+    Version        = '$($RuntimeContext.Version)'
     StartupMode    = '$StartupMode'
     PromptInitMode = '$PromptMode'
     Theme          = '$escapedTheme'
     ThemesDir      = '$escapedThemesDir'
-    PathScope      = '$($script:PathScope)'
+    PathScope      = '$($RuntimeContext.PathScope)'
     SupportRoot    = '$escapedSupportRoot'
 }
 "@
@@ -78,10 +90,11 @@ function Write-ManagedProfileSupportPayload {
         [Parameter(Mandatory = $true)][string]$StartupMode,
         [Parameter(Mandatory = $true)][string]$PromptMode,
         [string]$Theme = 'lightgreen',
-        [string]$ThemesDir = ''
+        [string]$ThemesDir = '',
+        [psobject]$RuntimeContext
     )
 
-    $supportRoot = Get-ManagedProfileSupportRoot
+    $supportRoot = Get-ManagedProfileSupportRoot -RuntimeContext $RuntimeContext
     foreach ($fileName in @(
             'UnixTools.ProfileLoader.ps1',
             'UnixTools.ProfileShared.ps1',
@@ -90,21 +103,22 @@ function Write-ManagedProfileSupportPayload {
             'UnixTools.SmartShell.ps1',
             'UnixTools.Prompt.ps1'
         )) {
-        $content = Read-ProfileSupportTemplate -Name $fileName
-        Write-AtomicUtf8File -Path (Join-Path $supportRoot $fileName) -Content $content
+        $content = Read-ProfileSupportTemplate -Name $fileName -RuntimeContext $RuntimeContext
+        Write-AtomicUtf8File -Path (Join-Path $supportRoot $fileName) -Content $content -RuntimeContext $RuntimeContext
     }
 
-    $configText = New-ProfileSupportConfigText -SupportRoot $supportRoot -StartupMode $StartupMode -PromptMode $PromptMode -Theme $Theme -ThemesDir $ThemesDir
-    Write-AtomicUtf8File -Path (Join-Path $supportRoot 'UnixTools.ProfileConfig.psd1') -Content $configText
+    $configText = New-ProfileSupportConfigText -SupportRoot $supportRoot -StartupMode $StartupMode -PromptMode $PromptMode -Theme $Theme -ThemesDir $ThemesDir -RuntimeContext $RuntimeContext
+    Write-AtomicUtf8File -Path (Join-Path $supportRoot 'UnixTools.ProfileConfig.psd1') -Content $configText -RuntimeContext $RuntimeContext
 
     return $supportRoot
 }
 
 function Remove-ManagedProfileSupportPayload {
     [CmdletBinding(SupportsShouldProcess = $true)]
-    param()
+    param([psobject]$RuntimeContext)
 
-    $supportRoot = Get-ManagedProfileSupportRoot
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    $supportRoot = Get-ManagedProfileSupportRoot -RuntimeContext $RuntimeContext
     if (-not (Test-Path -LiteralPath $supportRoot -PathType Container)) {
         return $supportRoot
     }
@@ -115,7 +129,7 @@ function Remove-ManagedProfileSupportPayload {
             continue
         }
 
-        if ($script:DryRun) {
+        if ($RuntimeContext.DryRun) {
             Write-DryRun "Remove-Item '$path' -Force"
         }
         else {
@@ -123,7 +137,7 @@ function Remove-ManagedProfileSupportPayload {
         }
     }
 
-    if (-not $script:DryRun) {
+    if (-not $RuntimeContext.DryRun) {
         $remaining = Get-ChildItem -LiteralPath $supportRoot -Force -ErrorAction SilentlyContinue
         if (-not $remaining) {
             Remove-Item -LiteralPath $supportRoot -Force -ErrorAction SilentlyContinue
@@ -151,12 +165,13 @@ function Get-ProfileLoaderBlockBody {
 
 function Get-ProfileSmartShellBlockBody {
     param(
-        [ValidateSet('Fast', 'Legacy')][string]$StartupMode = 'Fast'
+        [ValidateSet('Fast', 'Legacy')][string]$StartupMode = 'Fast',
+        [psobject]$RuntimeContext
     )
 
     return @(
         "# Startup mode: $StartupMode"
-        (Read-ProfileSupportTemplate -Name 'UnixTools.SmartShell.ps1')
+        (Read-ProfileSupportTemplate -Name 'UnixTools.SmartShell.ps1' -RuntimeContext $RuntimeContext)
     ) -join "`r`n"
 }
 
@@ -205,7 +220,8 @@ function Get-ProfilePromptBlockBody {
     param(
         [Parameter(Mandatory = $true)][string]$ThemesDir,
         [string]$Theme = 'lightgreen',
-        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Eager'
+        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Eager',
+        [psobject]$RuntimeContext
     )
 
     if ($PromptInitMode -eq 'Off') {
@@ -216,7 +232,7 @@ function Get-ProfilePromptBlockBody {
 
     return @(
         "# Prompt init mode: $PromptInitMode"
-        (Read-ProfileSupportTemplate -Name 'UnixTools.Prompt.ps1')
+        (Read-ProfileSupportTemplate -Name 'UnixTools.Prompt.ps1' -RuntimeContext $RuntimeContext)
     ) -join "`r`n"
 }
 
@@ -225,47 +241,55 @@ function Install-ProfileInlineSupport {
         [string]$ThemesDir,
         [string]$Theme = 'lightgreen',
         [ValidateSet('Fast', 'Legacy')][string]$StartupMode = 'Fast',
-        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptMode = 'Lazy'
+        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptMode = 'Lazy',
+        [psobject]$RuntimeContext
     )
 
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
     $profilePath = $PROFILE.CurrentUserCurrentHost
-    $backup = Backup-ProfileFile -ProfilePath $profilePath
-    if ($backup) { Write-Status -Type detail -Label 'Profile backup' -Detail (Split-Path $backup -Leaf) }
+    $backup = Backup-ProfileFile -ProfilePath $profilePath -RuntimeContext $RuntimeContext
+    if ($backup) { Write-Status -Type detail -Label 'Profile backup' -Detail (Split-Path $backup -Leaf) -RuntimeContext $RuntimeContext }
 
-    Remove-InstalledProfileSupport | Out-Null
-    $supportRoot = Write-ManagedProfileSupportPayload -StartupMode $StartupMode -PromptMode $PromptMode -Theme $Theme -ThemesDir $ThemesDir
+    Remove-InstalledProfileSupport -RuntimeContext $RuntimeContext | Out-Null
+    $supportRoot = Write-ManagedProfileSupportPayload -StartupMode $StartupMode -PromptMode $PromptMode -Theme $Theme -ThemesDir $ThemesDir -RuntimeContext $RuntimeContext
 
     $startMarker = '# >>> unix-tools-profile >>>'
     $endMarker = '# <<< unix-tools-profile <<<'
     $blockBody = Get-ProfileLoaderBlockBody -SupportRoot $supportRoot -StartupMode $StartupMode -PromptMode $PromptMode
-    Set-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody
+    Set-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody -RuntimeContext $RuntimeContext
 
-    Write-Status -Type ok -Label 'Profile blocks' -Detail "loader (startup=$StartupMode, prompt=$PromptMode) -> $profilePath"
+    Write-Status -Type ok -Label 'Profile blocks' -Detail "loader (startup=$StartupMode, prompt=$PromptMode) -> $profilePath" -RuntimeContext $RuntimeContext
     return 'profile-loader'
 }
 
 function Install-ProfileMissingSupport {
-    Install-ProfileInlineSupport -StartupMode 'Fast' -PromptMode 'Off'
+    param([psobject]$RuntimeContext)
+
+    Install-ProfileInlineSupport -StartupMode 'Fast' -PromptMode 'Off' -RuntimeContext $RuntimeContext
 }
 
 function Install-ProfileAliasCompat {
-    Install-ProfileInlineSupport -StartupMode 'Fast' -PromptMode 'Off'
+    param([psobject]$RuntimeContext)
+
+    Install-ProfileInlineSupport -StartupMode 'Fast' -PromptMode 'Off' -RuntimeContext $RuntimeContext
 }
 
 function Install-ProfileOhMyPosh {
     param(
         [Parameter(Mandatory = $true)][string]$ThemesDir,
         [string]$Theme = 'lightgreen',
-        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Eager'
+        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Eager',
+        [psobject]$RuntimeContext
     )
 
-    Install-ProfileInlineSupport -ThemesDir $ThemesDir -Theme $Theme -StartupMode 'Fast' -PromptMode $PromptInitMode
+    Install-ProfileInlineSupport -ThemesDir $ThemesDir -Theme $Theme -StartupMode 'Fast' -PromptMode $PromptInitMode -RuntimeContext $RuntimeContext
 }
 
 function Install-ProfileSmartShell {
     param(
-        [ValidateSet('Fast', 'Legacy')][string]$StartupMode = 'Fast'
+        [ValidateSet('Fast', 'Legacy')][string]$StartupMode = 'Fast',
+        [psobject]$RuntimeContext
     )
 
-    Install-ProfileInlineSupport -StartupMode $StartupMode -PromptMode 'Off'
+    Install-ProfileInlineSupport -StartupMode $StartupMode -PromptMode 'Off' -RuntimeContext $RuntimeContext
 }

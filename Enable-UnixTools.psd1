@@ -29,6 +29,7 @@
         'src\Private\PathManagement.ps1'
         'src\Private\ProfileMigration.ps1'
         'src\Private\ProfileSupportInstall.ps1'
+        'src\Private\RuntimeContext.ps1'
         'src\Private\TerminalSetup.ps1'
         'src\ProfileSupport\UnixTools.AliasCompat.ps1'
         'src\ProfileSupport\UnixTools.MissingShims.ps1'

@@ -22,7 +22,16 @@ function Invoke-NativeCommand {
 }
 
 function Backup-PathVariable {
-    param([string]$Scope = "Machine")
+    param(
+        [string]$Scope,
+        [psobject]$RuntimeContext
+    )
+
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    if (-not $PSBoundParameters.ContainsKey('Scope')) {
+        $Scope = $RuntimeContext.PathScope
+    }
+
     $current = [Environment]::GetEnvironmentVariable("Path", $Scope)
     if ([string]::IsNullOrWhiteSpace($current)) { return }
     $backupDir = if ($Scope -eq "User") {
@@ -34,26 +43,29 @@ function Backup-PathVariable {
     }
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $file = Join-Path $backupDir "path-backup-$Scope-$stamp.txt"
-    Write-AtomicUtf8File -Path $file -Content $current
+    Write-AtomicUtf8File -Path $file -Content $current -RuntimeContext $RuntimeContext
     Write-Verbose "PATH backup saved: $file"
-    Write-Status -Type detail -Label "PATH backup saved" -Detail (Split-Path $file -Leaf)
+    Write-Status -Type detail -Label "PATH backup saved" -Detail (Split-Path $file -Leaf) -RuntimeContext $RuntimeContext
 }
 
 function Assert-Admin {
+    param([psobject]$RuntimeContext)
+
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
     $p = New-Object Security.Principal.WindowsPrincipal($id)
-    if ($script:PathScope -eq "User") {
+    if ($RuntimeContext.PathScope -eq "User") {
         if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
             Write-Warning "Running in UserScope mode (admin not required)."
         }
         return $true
     }
     if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        if ($script:DryRun) {
+        if ($RuntimeContext.DryRun) {
             Write-Warning "Running in DryRun mode (admin checks relaxed)."
             return $true
         }
-        Write-Footer -Type fail -Message "Administrator rights are required for Machine scope."
+        Write-Footer -Type fail -Message "Administrator rights are required for Machine scope." -RuntimeContext $RuntimeContext
         Write-Dim "Re-run PowerShell as Administrator, or use -UserScope."
         Write-Dim "Example: .\Enable-UnixTools.ps1 -InstallFull -UserScope"
         Write-BlankLine
@@ -132,11 +144,12 @@ function Set-ScopedPathValue {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'ShouldProcess is enforced by the outer orchestration flow before this internal helper is called.')]
     param(
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$PathValue,
-        [Parameter(Mandatory = $true)][string]$Scope
+        [Parameter(Mandatory = $true)][string]$Scope,
+        [psobject]$RuntimeContext
     )
 
     Assert-PathLength -PathValue $PathValue -Scope $Scope
-    if ($script:DryRun) {
+    if (Test-EnableUnixToolsDryRun -RuntimeContext $RuntimeContext) {
         Write-DryRun "[Environment]::SetEnvironmentVariable('Path', '...len=$($PathValue.Length)...', '$Scope')"
         return
     }
@@ -144,10 +157,16 @@ function Set-ScopedPathValue {
     [Environment]::SetEnvironmentVariable("Path", $PathValue, $Scope)
 }
 
-function Add-MachinePathPrepend([string]$pathToPrepend) {
-    $scope = $script:PathScope
+function Add-MachinePathPrepend {
+    param(
+        [string]$pathToPrepend,
+        [psobject]$RuntimeContext
+    )
+
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    $scope = $RuntimeContext.PathScope
     $norm = $pathToPrepend.Trim().TrimEnd('\')
-    if (-not $script:DryRun -and -not (Test-Path $norm)) {
+    if (-not $RuntimeContext.DryRun -and -not (Test-Path $norm)) {
         throw "Path does not exist: $norm"
     }
 
@@ -161,11 +180,17 @@ function Add-MachinePathPrepend([string]$pathToPrepend) {
     }
 
     $newPath = (@($norm) + $parts) -join ';'
-    Set-ScopedPathValue -PathValue $newPath -Scope $scope
+    Set-ScopedPathValue -PathValue $newPath -Scope $scope -RuntimeContext $RuntimeContext
 }
 
-function Add-MachinePathEntry([string[]]$pathsToAdd) {
-    $scope = $script:PathScope
+function Add-MachinePathEntry {
+    param(
+        [string[]]$pathsToAdd,
+        [psobject]$RuntimeContext
+    )
+
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    $scope = $RuntimeContext.PathScope
     $current = [Environment]::GetEnvironmentVariable("Path", $scope)
     if (-not $current) { $current = "" }
 
@@ -188,7 +213,7 @@ function Add-MachinePathEntry([string[]]$pathsToAdd) {
 
     if ($changed) {
         $newPath = $parts -join ';'
-        Set-ScopedPathValue -PathValue $newPath -Scope $scope
+        Set-ScopedPathValue -PathValue $newPath -Scope $scope -RuntimeContext $RuntimeContext
     }
 
     return $changed
@@ -196,9 +221,13 @@ function Add-MachinePathEntry([string[]]$pathsToAdd) {
 
 function Remove-MachinePathEntry {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'ShouldProcess is enforced by the outer orchestration flow before this internal helper is called.')]
-    param([string[]]$pathsToRemove)
+    param(
+        [string[]]$pathsToRemove,
+        [psobject]$RuntimeContext
+    )
 
-    $scope = $script:PathScope
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    $scope = $RuntimeContext.PathScope
     $current = [Environment]::GetEnvironmentVariable("Path", $scope)
     if (-not $current) { return $false }
 
@@ -218,15 +247,16 @@ function Remove-MachinePathEntry {
 
     if (($newParts -join ';') -eq ($parts -join ';')) { return $false }
     $newPath = $newParts -join ';'
-    Set-ScopedPathValue -PathValue $newPath -Scope $scope
+    Set-ScopedPathValue -PathValue $newPath -Scope $scope -RuntimeContext $RuntimeContext
     return $true
 }
 
 function Update-MachinePathEntry {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'ShouldProcess is enforced by the outer orchestration flow before this internal helper is called.')]
-    param()
+    param([psobject]$RuntimeContext)
 
-    $scope = $script:PathScope
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    $scope = $RuntimeContext.PathScope
     $current = [Environment]::GetEnvironmentVariable("Path", $scope)
     if (-not $current) { return }
 
@@ -241,17 +271,28 @@ function Update-MachinePathEntry {
     }
 
     $newPath = $newParts -join ';'
-    Set-ScopedPathValue -PathValue $newPath -Scope $scope
+    Set-ScopedPathValue -PathValue $newPath -Scope $scope -RuntimeContext $RuntimeContext
 }
 
 function New-DirectoryIfMissing {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Directory creation is controlled by higher-level install flows and DryRun behavior.')]
-    param([string]$dir)
+    param(
+        [string]$dir,
+        [psobject]$RuntimeContext
+    )
 
-    Initialize-Directory -Path $dir
+    Initialize-Directory -Path $dir -RuntimeContext $RuntimeContext
 }
 
-function Write-ShimCmd([string]$shimDir, [string]$name, [string]$targetExePath) {
+function Write-ShimCmd {
+    param(
+        [string]$shimDir,
+        [string]$name,
+        [string]$targetExePath,
+        [psobject]$RuntimeContext
+    )
+
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
     if (-not (Test-Path $targetExePath)) { return $false }
 
     $shimPath = Join-Path $shimDir "$name.cmd"
@@ -262,11 +303,11 @@ function Write-ShimCmd([string]$shimDir, [string]$name, [string]$targetExePath) 
         "set ""_unix_tool=$safeTarget"""
         """%_unix_tool%"" %*"
     ) -join "`r`n"
-    if ($script:DryRun) {
+    if ($RuntimeContext.DryRun) {
         Write-DryRun "Write-AtomicAsciiFile '$shimPath' (Create shim for $name -> $targetExePath)"
         return $true
     }
-    Write-AtomicAsciiFile -Path $shimPath -Content $content
+    Write-AtomicAsciiFile -Path $shimPath -Content $content -RuntimeContext $RuntimeContext
     return $true
 }
 
@@ -328,6 +369,8 @@ function Get-ApplicationCommandIndex([string]$excludeDir = $null) {
 }
 
 function Initialize-OptionalPackageManagerSet {
+    param([psobject]$RuntimeContext)
+
     $wingetAvailable = [bool](Get-Command winget -ErrorAction SilentlyContinue)
     $chocoAvailable = [bool](Get-Command choco  -ErrorAction SilentlyContinue)
 
@@ -343,7 +386,7 @@ function Initialize-OptionalPackageManagerSet {
         }
         $wingetAvailable = [bool](Get-Command winget -ErrorAction SilentlyContinue)
         if ($wingetAvailable) {
-            Write-Status -Type ok -Label "winget recovered" -Indent
+            Write-Status -Type ok -Label "winget recovered" -Indent -RuntimeContext $RuntimeContext
         }
     }
 

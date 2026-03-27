@@ -78,6 +78,7 @@ Describe 'Publish packaging' {
             'src\Private\MainOrchestration.ps1',
             'src\Private\OptionalTools.ps1',
             'src\Private\ProfileSupportInstall.ps1',
+            'src\Private\RuntimeContext.ps1',
             'src\ProfileSupport\UnixTools.ProfileLoader.ps1',
             'src\ProfileSupport\UnixTools.ProfileShared.ps1',
             'src\Public\Invoke-EnableUnixTools.ps1'

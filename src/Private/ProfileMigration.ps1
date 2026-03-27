@@ -109,7 +109,10 @@ function Find-LegacyInlineShimBlock {
 
 function Remove-LegacyInlineProfileShimBlock {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Profile mutation confirmation is handled by the caller before this helper runs.')]
-    param([Parameter(Mandatory = $true)][string]$ProfilePath)
+    param(
+        [Parameter(Mandatory = $true)][string]$ProfilePath,
+        [psobject]$RuntimeContext
+    )
 
     $block = Find-LegacyInlineShimBlock -ProfilePath $ProfilePath
     if ($block.Status -ne 'Found') {
@@ -144,7 +147,7 @@ function Remove-LegacyInlineProfileShimBlock {
         $updated += "`r`n"
     }
 
-    Write-AtomicUtf8File -Path $ProfilePath -Content $updated
+    Write-AtomicUtf8File -Path $ProfilePath -Content $updated -RuntimeContext $RuntimeContext
 
     $block.Removed = $true
     $block.Status = 'Removed'
@@ -200,7 +203,10 @@ function Get-ProfileInstallationState {
 
 function Remove-ManagedProfileBlockSet {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Profile mutation confirmation is handled by the caller before this helper runs.')]
-    param([Parameter(Mandatory = $true)][string]$ProfilePath)
+    param(
+        [Parameter(Mandatory = $true)][string]$ProfilePath,
+        [psobject]$RuntimeContext
+    )
 
     if (-not (Test-Path -LiteralPath $ProfilePath -PathType Leaf)) { return }
 
@@ -224,31 +230,32 @@ function Remove-ManagedProfileBlockSet {
     }
 
     if ($updated -ne $existing) {
-        Write-AtomicUtf8File -Path $ProfilePath -Content $updated
+        Write-AtomicUtf8File -Path $ProfilePath -Content $updated -RuntimeContext $RuntimeContext
     }
 }
 
 function Remove-InstalledProfileSupport {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The uninstall orchestration flow owns ShouldProcess for this internal helper.')]
-    param()
+    param([psobject]$RuntimeContext)
 
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
     $profilePath = $PROFILE.CurrentUserCurrentHost
-    $backup = Backup-ProfileFile -ProfilePath $profilePath
+    $backup = Backup-ProfileFile -ProfilePath $profilePath -RuntimeContext $RuntimeContext
     if ($backup) { Write-Verbose "Profile backup: $backup" }
 
-    Remove-ManagedProfileBlockSet -ProfilePath $profilePath
-    $legacyResult = Remove-LegacyInlineProfileShimBlock -ProfilePath $profilePath
+    Remove-ManagedProfileBlockSet -ProfilePath $profilePath -RuntimeContext $RuntimeContext
+    $legacyResult = Remove-LegacyInlineProfileShimBlock -ProfilePath $profilePath -RuntimeContext $RuntimeContext
 
     if (Get-Command Remove-ManagedProfileSupportPayload -CommandType Function -ErrorAction SilentlyContinue) {
-        Remove-ManagedProfileSupportPayload | Out-Null
+        Remove-ManagedProfileSupportPayload -RuntimeContext $RuntimeContext | Out-Null
     }
 
     switch ($legacyResult.Status) {
         'Removed' {
-            Write-Status -Type ok -Label 'Legacy inline shims' -Detail $legacyResult.Detail
+            Write-Status -Type ok -Label 'Legacy inline shims' -Detail $legacyResult.Detail -RuntimeContext $RuntimeContext
         }
         'Ambiguous' {
-            Write-Status -Type warn -Label 'Legacy inline shims' -Detail $legacyResult.Detail
+            Write-Status -Type warn -Label 'Legacy inline shims' -Detail $legacyResult.Detail -RuntimeContext $RuntimeContext
         }
     }
 

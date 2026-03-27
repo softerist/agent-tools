@@ -17,23 +17,24 @@ catch {
 $currentUi = Get-Variable -Scope Script -Name UI -ValueOnly -ErrorAction SilentlyContinue
 if (-not $currentUi) {
     $script:UI = [pscustomobject]@{
-        TL     = [char]0x250C # ┌
-        TR     = [char]0x2510 # ┐
-        BL     = [char]0x2514 # └
-        BR     = [char]0x2518 # ┘
-        HLine  = [char]0x2500 # ─
-        VLine  = [char]0x2502 # │
-        Ok     = [char]0x2714 # ✔
-        Fail   = [char]0x2716 # ✖
-        Info   = [char]0x2139 # ℹ
-        Detail = [char]0x203A # ›
-        Warn   = [char]0x26A0 # ⚠
-        Skip   = [char]0x21B7 # ↷
-        Arrow  = [char]0x2192 # →
+        TL     = '+'
+        TR     = '+'
+        BL     = '+'
+        BR     = '+'
+        HLine  = '-'
+        VLine  = '|'
+        Ok     = '+'
+        Fail   = 'x'
+        Info   = 'i'
+        Detail = '>'
+        Warn   = '!'
+        Skip   = '-'
+        Arrow  = '->'
     }
 }
 
 foreach ($path in @(
+        (Join-Path $privateRoot 'RuntimeContext.ps1'),
         (Join-Path $privateRoot 'Output.ps1'),
         (Join-Path $privateRoot 'FileIO.ps1'),
         (Join-Path $privateRoot 'PathManagement.ps1'),
@@ -49,21 +50,7 @@ foreach ($path in @(
         throw "Bootstrap source not found: $path"
     }
 
-    $tokens = $null
-    $errors = $null
-    $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
-    if ($errors -and $errors.Count -gt 0) {
-        throw ($errors | ForEach-Object Message | Out-String)
-    }
-
-    $functions = @($ast.FindAll({
-                param($node)
-                $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
-            }, $false))
-
-    foreach ($functionAst in $functions) {
-        . ([scriptblock]::Create($functionAst.Extent.Text))
-    }
+    . $path
 }
 
 $script:EnableUnixToolsBootstrapLoaded = $true

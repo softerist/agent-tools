@@ -1,13 +1,22 @@
 function Write-Header {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive console output is intentionally centralized in this file.')]
     param(
-        [string]$Title = "Unix Tools for Windows",
-        [string]$Version = $script:EnableUnixToolsVersion,
-        [string]$Scope = $script:PathScope,
-        [string]$Mode = ""
+        [psobject]$RuntimeContext,
+        [string]$Title = 'Unix Tools for Windows',
+        [string]$Version,
+        [string]$Scope,
+        [string]$Mode = ''
     )
 
-    $ui = $script:UI
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    if (-not $PSBoundParameters.ContainsKey('Version')) {
+        $Version = $RuntimeContext.Version
+    }
+    if (-not $PSBoundParameters.ContainsKey('Scope')) {
+        $Scope = $RuntimeContext.PathScope
+    }
+
+    $ui = $RuntimeContext.Ui
     $inner = "$Title"
     $right = "v$Version"
     $modeText = if ($Mode) { "$Scope scope $($ui.Detail) $Mode" } else { "$Scope scope" }
@@ -24,7 +33,7 @@ function Write-Header {
     $pad2 = $boxWidth - $modeText.Length - 1
     $line2Content = " $modeText$(' ' * [Math]::Max($pad2, 0))"
 
-    Write-Host ""
+    Write-Host ''
     Write-Host $topBorder -ForegroundColor DarkCyan
     Write-Host -NoNewline "  $($ui.VLine)" -ForegroundColor DarkCyan
     Write-Host -NoNewline $line1Content -ForegroundColor White
@@ -33,19 +42,23 @@ function Write-Header {
     Write-Host -NoNewline $line2Content -ForegroundColor DarkGray
     Write-Host "$($ui.VLine)" -ForegroundColor DarkCyan
     Write-Host $bottomBorder -ForegroundColor DarkCyan
-    Write-Host ""
+    Write-Host ''
 }
 
 function Write-Section {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive console output is intentionally centralized in this file.')]
-    param([Parameter(Mandatory)][string]$Title)
+    param(
+        [Parameter(Mandatory)][string]$Title,
+        [psobject]$RuntimeContext
+    )
 
-    $ui = $script:UI
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    $ui = $RuntimeContext.Ui
     $lineLen = [Math]::Max(50 - $Title.Length - 2, 6)
     $section = "  $($ui.HLine * 3) $Title $($ui.HLine * $lineLen)"
-    Write-Host ""
+    Write-Host ''
     Write-Host $section -ForegroundColor DarkCyan
-    Write-Host ""
+    Write-Host ''
 }
 
 function Write-Status {
@@ -53,12 +66,14 @@ function Write-Status {
     param(
         [Parameter(Mandatory)][ValidateSet('ok', 'fail', 'info', 'detail', 'warn', 'skip')][string]$Type,
         [Parameter(Mandatory)][string]$Label,
-        [string]$Detail = "",
-        [switch]$Indent
+        [string]$Detail = '',
+        [switch]$Indent,
+        [psobject]$RuntimeContext
     )
 
-    $ui = $script:UI
-    $prefix = if ($Indent) { "    " } else { "  " }
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    $ui = $RuntimeContext.Ui
+    $prefix = if ($Indent) { '    ' } else { '  ' }
 
     $icon = switch ($Type) {
         'ok' { $ui.Ok }
@@ -87,7 +102,7 @@ function Write-Status {
         Write-Host " $Detail" -ForegroundColor DarkGray
     }
     else {
-        Write-Host ""
+        Write-Host ''
     }
 }
 
@@ -95,7 +110,7 @@ function Write-Dim {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive console output is intentionally centralized in this file.')]
     param([Parameter(Mandatory)][string]$Text, [switch]$Indent)
 
-    $prefix = if ($Indent) { "      " } else { "  " }
+    $prefix = if ($Indent) { '      ' } else { '  ' }
     Write-Host "$prefix$Text" -ForegroundColor DarkGray
 }
 
@@ -104,7 +119,7 @@ function Write-CompactList {
     param(
         [Parameter(Mandatory)][string[]]$Items,
         [int]$MaxWidth = 70,
-        [string]$Prefix = "      "
+        [string]$Prefix = '      '
     )
 
     if ($Items.Count -eq 0) { return }
@@ -126,11 +141,13 @@ function Write-CompactList {
 function Write-Footer {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive console output is intentionally centralized in this file.')]
     param(
-        [string]$Message = "Done",
-        [ValidateSet('ok', 'fail', 'warn')][string]$Type = 'ok'
+        [string]$Message = 'Done',
+        [ValidateSet('ok', 'fail', 'warn')][string]$Type = 'ok',
+        [psobject]$RuntimeContext
     )
 
-    $ui = $script:UI
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    $ui = $RuntimeContext.Ui
     $icon = switch ($Type) {
         'ok' { $ui.Ok }
         'fail' { $ui.Fail }
@@ -151,13 +168,13 @@ function Write-Footer {
     $topBorder = "  $($ui.TL)$($ui.HLine * $boxWidth)$($ui.TR)"
     $bottomBorder = "  $($ui.BL)$($ui.HLine * $boxWidth)$($ui.BR)"
 
-    Write-Host ""
+    Write-Host ''
     Write-Host $topBorder -ForegroundColor DarkCyan
     Write-Host -NoNewline "  $($ui.VLine)" -ForegroundColor DarkCyan
     Write-Host -NoNewline $contentInner -ForegroundColor $color
     Write-Host "$($ui.VLine)" -ForegroundColor DarkCyan
     Write-Host $bottomBorder -ForegroundColor DarkCyan
-    Write-Host ""
+    Write-Host ''
 }
 
 function Write-DryRun {
@@ -171,7 +188,7 @@ function Write-BlankLine {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive console output is intentionally centralized in this file.')]
     param()
 
-    Write-Host ""
+    Write-Host ''
 }
 
 function Write-AccentLine {

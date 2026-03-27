@@ -35,19 +35,33 @@ function Invoke-UnixToolSetup {
     else {
         Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
     }
+    $sourceRoot = if ($script:EnableUnixToolsSourceRoot) {
+        $script:EnableUnixToolsSourceRoot
+    }
+    else {
+        Split-Path $PSScriptRoot -Parent
+    }
+
     $manifestPath = Join-Path $repoRoot 'Enable-UnixTools.psd1'
-    $script:EnableUnixToolsHelpPath = Join-Path $repoRoot 'Enable-UnixTools.ps1'
-    $script:EnableUnixToolsManifestPath = $manifestPath
-    $script:EnableUnixToolsVersion = try {
+    $helpPath = Join-Path $repoRoot 'Enable-UnixTools.ps1'
+    $version = try {
         [string](Import-PowerShellDataFile -Path $manifestPath).ModuleVersion
     }
     catch {
         '0.0.0'
     }
 
-    $script:PathScope = if ($UserScope) { 'User' } else { 'Machine' }
-    $script:PathDisplay = "$($script:PathScope) PATH"
-    $script:DryRun = $DryRun.IsPresent
+    $ui = Get-EnableUnixToolsScriptValue -Name UI -Default (Get-DefaultEnableUnixToolsUi)
+    $pathScope = if ($UserScope) { 'User' } else { 'Machine' }
+    $runtimeContext = New-EnableUnixToolsRuntimeContext `
+        -RepoRoot $repoRoot `
+        -SourceRoot $sourceRoot `
+        -ManifestPath $manifestPath `
+        -HelpPath $helpPath `
+        -Version $version `
+        -PathScope $pathScope `
+        -DryRun:$DryRun.IsPresent `
+        -Ui $ui
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     try {
@@ -61,16 +75,10 @@ function Invoke-UnixToolSetup {
         $ConfirmPreference = 'None'
     }
 
-    $sourceRoot = if ($script:EnableUnixToolsSourceRoot) {
-        $script:EnableUnixToolsSourceRoot
-    }
-    else {
-        Split-Path $PSScriptRoot -Parent
-    }
     $mainExecutionPath = Join-Path $sourceRoot 'Private\MainExecutionBody.ps1'
     if (-not (Test-Path -LiteralPath $mainExecutionPath -PathType Leaf)) {
         throw "Main execution body not found: $mainExecutionPath"
     }
 
-    . $mainExecutionPath
+    . $mainExecutionPath -runtimeContext $runtimeContext
 }

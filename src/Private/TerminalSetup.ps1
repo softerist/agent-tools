@@ -1,28 +1,32 @@
 function Save-TerminalThemeBundle {
-    param([Parameter(Mandatory = $true)][string]$ThemesDir)
+    param(
+        [Parameter(Mandatory = $true)][string]$ThemesDir,
+        [psobject]$RuntimeContext
+    )
 
-    if ($script:DryRun) {
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    if ($RuntimeContext.DryRun) {
         Write-DryRun "Download and extract Oh My Posh themes to '$ThemesDir'"
         return
     }
 
     if (Test-Path $ThemesDir) {
-        Write-Status -Type info -Label "Themes directory" -Detail "already exists, skipping download" -Indent
-        Update-ManagedOhMyPoshTheme -ThemesDir $ThemesDir
+        Write-Status -Type info -Label "Themes directory" -Detail "already exists, skipping download" -Indent -RuntimeContext $RuntimeContext
+        Update-ManagedOhMyPoshTheme -ThemesDir $ThemesDir -RuntimeContext $RuntimeContext
         return
     }
 
     $zip = Join-Path $env:TEMP "omp-themes-$([guid]::NewGuid().ToString().Split('-')[0]).zip"
     try {
-        Write-Status -Type detail -Label "Downloading themes" -Detail "oh-my-posh/releases/latest" -Indent
+        Write-Status -Type detail -Label "Downloading themes" -Detail "oh-my-posh/releases/latest" -Indent -RuntimeContext $RuntimeContext
         Invoke-WebRequest -Uri "https://github.com/JanDeDobbeleer/oh-my-posh/releases/latest/download/themes.zip" -OutFile $zip -ErrorAction Stop
-        New-DirectoryIfMissing $ThemesDir
-        Write-Status -Type detail -Label "Extracting themes" -Detail $ThemesDir -Indent
+        New-DirectoryIfMissing -dir $ThemesDir -RuntimeContext $RuntimeContext
+        Write-Status -Type detail -Label "Extracting themes" -Detail $ThemesDir -Indent -RuntimeContext $RuntimeContext
         Expand-Archive -Path $zip -DestinationPath $ThemesDir -Force -ErrorAction Stop
-        Update-ManagedOhMyPoshTheme -ThemesDir $ThemesDir
+        Update-ManagedOhMyPoshTheme -ThemesDir $ThemesDir -RuntimeContext $RuntimeContext
     }
     catch {
-        Write-Status -Type warn -Label "Themes failed" -Detail $_.Exception.Message -Indent
+        Write-Status -Type warn -Label "Themes failed" -Detail $_.Exception.Message -Indent -RuntimeContext $RuntimeContext
     }
     finally {
         if (Test-Path $zip) { Remove-Item -Path $zip -Force -ErrorAction SilentlyContinue }
@@ -31,7 +35,10 @@ function Save-TerminalThemeBundle {
 
 function Update-ManagedOhMyPoshTheme {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Theme file writes are gated by higher-level install flows and tested separately.')]
-    param([Parameter(Mandatory = $true)][string]$ThemesDir)
+    param(
+        [Parameter(Mandatory = $true)][string]$ThemesDir,
+        [psobject]$RuntimeContext
+    )
 
     $lightgreenThemePath = Join-Path $ThemesDir 'lightgreen.omp.json'
     if (-not (Test-Path -LiteralPath $lightgreenThemePath -PathType Leaf)) {
@@ -69,11 +76,14 @@ function Update-ManagedOhMyPoshTheme {
     }
 
     $themeContent = $themeJson | ConvertTo-Json -Depth 100
-    Write-AtomicUtf8File -Path $lightgreenThemePath -Content $themeContent
+    Write-AtomicUtf8File -Path $lightgreenThemePath -Content $themeContent -RuntimeContext $RuntimeContext
 }
 
 function Install-NerdFont {
-    if ($script:DryRun) {
+    param([psobject]$RuntimeContext)
+
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    if ($RuntimeContext.DryRun) {
         Write-DryRun "Download and install CaskaydiaCove Nerd Font"
         return
     }
@@ -88,19 +98,19 @@ function Install-NerdFont {
     } | Where-Object { $_ -ne $null } | Select-Object -First 1
 
     if ($fontFileFound) {
-        Write-Status -Type ok -Label "Nerd Font" -Detail "CaskaydiaCove already installed, skipping" -Indent
+        Write-Status -Type ok -Label "Nerd Font" -Detail "CaskaydiaCove already installed, skipping" -Indent -RuntimeContext $RuntimeContext
         return
     }
 
     $zip = Join-Path $env:TEMP "CascadiaCode-$([guid]::NewGuid().ToString().Split('-')[0]).zip"
     $dir = Join-Path $env:TEMP "CascadiaCode-$([guid]::NewGuid().ToString().Split('-')[0])"
     try {
-        Write-Status -Type detail -Label "Downloading font" -Detail "ryanoasis/nerd-fonts" -Indent
+        Write-Status -Type detail -Label "Downloading font" -Detail "ryanoasis/nerd-fonts" -Indent -RuntimeContext $RuntimeContext
         Invoke-WebRequest -Uri "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/CascadiaCode.zip" -OutFile $zip -ErrorAction Stop
         Initialize-Directory -Path $dir
         Expand-Archive -Path $zip -DestinationPath $dir -Force -ErrorAction Stop
 
-        Write-Status -Type detail -Label "Installing font" -Detail "copying to User and System Fonts (silent)" -Indent
+        Write-Status -Type detail -Label "Installing font" -Detail "copying to User and System Fonts (silent)" -Indent -RuntimeContext $RuntimeContext
 
         $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
         $installLocations = @(
@@ -127,7 +137,7 @@ function Install-NerdFont {
         }
     }
     catch {
-        Write-Status -Type warn -Label "Font install failed" -Detail $_.Exception.Message -Indent
+        Write-Status -Type warn -Label "Font install failed" -Detail $_.Exception.Message -Indent -RuntimeContext $RuntimeContext
     }
     finally {
         if (Test-Path $zip) { Remove-Item -Path $zip -Force -ErrorAction SilentlyContinue }
@@ -136,7 +146,9 @@ function Install-NerdFont {
 }
 
 function Uninstall-NerdFont {
-    Write-Status -Type detail -Label "Uninstalling font" -Detail "removing CaskaydiaCove from User and System Fonts" -Indent
+    param([psobject]$RuntimeContext)
+
+    Write-Status -Type detail -Label "Uninstalling font" -Detail "removing CaskaydiaCove from User and System Fonts" -Indent -RuntimeContext $RuntimeContext
     $removedCount = 0
 
     $fontLocations = @(
@@ -170,11 +182,11 @@ function Uninstall-NerdFont {
     }
 
     if ($removedCount -gt 0) {
-        Write-Status -Type ok -Label "Nerd Font" -Detail "removed $removedCount font files/registry keys" -Indent
+        Write-Status -Type ok -Label "Nerd Font" -Detail "removed $removedCount font files/registry keys" -Indent -RuntimeContext $RuntimeContext
         return $true
     }
     else {
-        Write-Status -Type info -Label "Nerd Font" -Detail "not found in User or System Fonts" -Indent
+        Write-Status -Type info -Label "Nerd Font" -Detail "not found in User or System Fonts" -Indent -RuntimeContext $RuntimeContext
         return $false
     }
 }
@@ -183,7 +195,8 @@ function Update-EditorAndTerminalFontConfig {
     [CmdletBinding(SupportsShouldProcess = $true)]
     [OutputType([bool])]
     param(
-        [Parameter(Mandatory = $true)][string]$SettingsPath
+        [Parameter(Mandatory = $true)][string]$SettingsPath,
+        [psobject]$RuntimeContext
     )
 
     if (-not (Test-Path $SettingsPath)) {
@@ -240,7 +253,7 @@ function Update-EditorAndTerminalFontConfig {
     }
 
     if ($updated) {
-        Write-AtomicUtf8File -Path $SettingsPath -Content $content
+        Write-AtomicUtf8File -Path $SettingsPath -Content $content -RuntimeContext $RuntimeContext
     }
 
     return $updated
@@ -249,7 +262,8 @@ function Update-EditorAndTerminalFontConfig {
 function Update-WindowsTerminalFontConfig {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Settings file writes are gated by higher-level install flows and tested separately.')]
     param(
-        [Parameter(Mandatory = $true)][string]$SettingsPath
+        [Parameter(Mandatory = $true)][string]$SettingsPath,
+        [psobject]$RuntimeContext
     )
 
     if (-not (Test-Path -LiteralPath $SettingsPath -PathType Leaf)) {
@@ -271,20 +285,20 @@ function Update-WindowsTerminalFontConfig {
         return $false
     }
 
-    Write-AtomicUtf8File -Path $SettingsPath -Content $content
+    Write-AtomicUtf8File -Path $SettingsPath -Content $content -RuntimeContext $RuntimeContext
     return $true
 }
 
 function Set-TerminalFontConfig {
     [CmdletBinding(SupportsShouldProcess = $true)]
-    param()
+    param([psobject]$RuntimeContext)
 
-    Write-Status -Type detail -Label "Configuring Editors" -Detail "injecting CaskaydiaCove NF into WT, VSCode, and Antigravity" -Indent
+    Write-Status -Type detail -Label "Configuring Editors" -Detail "injecting CaskaydiaCove NF into WT, VSCode, and Antigravity" -Indent -RuntimeContext $RuntimeContext
 
     $wtPaths = Get-ChildItem -Path "$env:LOCALAPPDATA\Packages" -Filter "Microsoft.WindowsTerminal*" -Directory -ErrorAction SilentlyContinue
     foreach ($wtDir in $wtPaths) {
         $wtSettings = Join-Path $wtDir.FullName "LocalState\settings.json"
-        Update-WindowsTerminalFontConfig -SettingsPath $wtSettings | Out-Null
+        Update-WindowsTerminalFontConfig -SettingsPath $wtSettings -RuntimeContext $RuntimeContext | Out-Null
     }
 
     $vscodeSettingsDirs = @(
@@ -294,21 +308,22 @@ function Set-TerminalFontConfig {
     )
     foreach ($dir in $vscodeSettingsDirs) {
         $vscodePath = Join-Path $dir "settings.json"
-        Update-EditorAndTerminalFontConfig -SettingsPath $vscodePath | Out-Null
+        Update-EditorAndTerminalFontConfig -SettingsPath $vscodePath -RuntimeContext $RuntimeContext | Out-Null
     }
 
-    Write-Status -Type ok -Label "Configuration" -Detail "WT, VSCode, and Antigravity updated to use Nerd Font" -Indent
+    Write-Status -Type ok -Label "Configuration" -Detail "WT, VSCode, and Antigravity updated to use Nerd Font" -Indent -RuntimeContext $RuntimeContext
 }
 
 function Install-TerminalSetup {
     param(
-        [Parameter(Mandatory = $true)][string]$ThemesDir
+        [Parameter(Mandatory = $true)][string]$ThemesDir,
+        [psobject]$RuntimeContext
     )
 
-    Write-Section "Terminal Setup"
+    Write-Section "Terminal Setup" -RuntimeContext $RuntimeContext
 
-    Save-TerminalThemeBundle -ThemesDir $ThemesDir
-    Install-NerdFont
-    Set-TerminalFontConfig
+    Save-TerminalThemeBundle -ThemesDir $ThemesDir -RuntimeContext $RuntimeContext
+    Install-NerdFont -RuntimeContext $RuntimeContext
+    Set-TerminalFontConfig -RuntimeContext $RuntimeContext
 }
 

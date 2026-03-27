@@ -10,6 +10,7 @@ Import-ScriptFunction -ScriptPath $publishPath -Names @(
 )
 
 Import-ScriptFunction -ScriptPath $modulePath -Names @(
+    'New-EnableUnixToolsRuntimeContext',
     'Get-ManagedProfileSupportFileNameList',
     'Get-ProfileInstallationState',
     'Install-ProfileInlineSupport',
@@ -76,10 +77,19 @@ function Invoke-WithTemporaryUserState {
 }
 
 function Initialize-IntegrationState {
-    $script:PathScope = 'User'
-    $script:PathDisplay = 'User PATH'
-    $script:DryRun = $false
-    Remove-Variable -Scope Script -Name ProfileBackupPath -ErrorAction SilentlyContinue
+    param(
+        [switch]$DryRun
+    )
+
+    $manifest = Import-PowerShellDataFile -Path $modulePath
+    return New-EnableUnixToolsRuntimeContext `
+        -RepoRoot $repoRoot `
+        -SourceRoot (Join-Path $repoRoot 'src') `
+        -ManifestPath $modulePath `
+        -HelpPath (Join-Path $repoRoot 'Enable-UnixTools.ps1') `
+        -Version ([string]$manifest.ModuleVersion) `
+        -PathScope 'User' `
+        -DryRun:$DryRun.IsPresent
 }
 
 Describe 'Integration flows' {
@@ -148,9 +158,9 @@ Describe 'Integration flows' {
         Invoke-WithTemporaryUserState {
             param($state)
 
-            Initialize-IntegrationState
+            $runtimeContext = Initialize-IntegrationState
 
-            Install-ProfileInlineSupport -ThemesDir (Join-Path $state.Root 'Themes') -Theme 'lightgreen' -StartupMode Fast -PromptMode Off | Out-Null
+            Install-ProfileInlineSupport -ThemesDir (Join-Path $state.Root 'Themes') -Theme 'lightgreen' -StartupMode Fast -PromptMode Off -RuntimeContext $runtimeContext | Out-Null
 
             $installedState = Get-ProfileInstallationState -ProfilePath $state.ProfilePath
             $installedState.HasManagedBlocks | Should Be $true
@@ -161,7 +171,7 @@ Describe 'Integration flows' {
                 (Test-Path -LiteralPath (Join-Path $state.SupportRoot $fileName) -PathType Leaf) | Should Be $true
             }
 
-            Remove-InstalledProfileSupport | Out-Null
+            Remove-InstalledProfileSupport -RuntimeContext $runtimeContext | Out-Null
 
             $removedState = Get-ProfileInstallationState -ProfilePath $state.ProfilePath
             $removedState.HasManagedBlocks | Should Be $false

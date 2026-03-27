@@ -1,10 +1,18 @@
 $repoRoot = Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'Support\TestHelpers.ps1')
 
+Import-SourceFunction -SourcePath (Join-Path $repoRoot 'src\Private\RuntimeContext.ps1') -Names @(
+    'Get-EnableUnixToolsScriptValue',
+    'Get-DefaultEnableUnixToolsUi',
+    'New-EnableUnixToolsRuntimeContext',
+    'Resolve-EnableUnixToolsRuntimeContext',
+    'Test-EnableUnixToolsDryRun'
+)
 Import-SourceFunction -SourcePath (Join-Path $repoRoot 'src\Private\Output.ps1') -Names @(
     'Write-DryRun'
 )
 Import-SourceFunction -SourcePath (Join-Path $repoRoot 'src\Private\FileIO.ps1') -Names @(
+    'Test-IsDryRunEnabled',
     'Initialize-Directory',
     'Write-AtomicTextFile',
     'Write-AtomicUtf8File',
@@ -34,16 +42,15 @@ Describe 'Runtime mutation helpers' {
     It 'does not write atomic UTF-8 files during dry run' {
         $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agent-tools-dryrun-' + [guid]::NewGuid())
         $filePath = Join-Path $tempRoot 'nested\sample.txt'
-        $script:DryRun = $true
+        $runtimeContext = New-EnableUnixToolsRuntimeContext -PathScope 'User' -DryRun:$true
 
         try {
-            Write-AtomicUtf8File -Path $filePath -Content 'sample'
+            Write-AtomicUtf8File -Path $filePath -Content 'sample' -RuntimeContext $runtimeContext
 
             (Test-Path -LiteralPath $tempRoot) | Should Be $false
             (Test-Path -LiteralPath $filePath) | Should Be $false
         }
         finally {
-            $script:DryRun = $false
             Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
@@ -51,12 +58,12 @@ Describe 'Runtime mutation helpers' {
     It 'creates shim cmd files through the shared atomic write helper' {
         $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agent-tools-shim-' + [guid]::NewGuid())
         $targetPath = Join-Path $env:WINDIR 'System32\cmd.exe'
-        $script:DryRun = $false
+        $runtimeContext = New-EnableUnixToolsRuntimeContext -PathScope 'User' -DryRun:$false
 
         try {
             New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 
-            (Write-ShimCmd -shimDir $tempRoot -name 'sample' -targetExePath $targetPath) | Should Be $true
+            (Write-ShimCmd -shimDir $tempRoot -name 'sample' -targetExePath $targetPath -RuntimeContext $runtimeContext) | Should Be $true
 
             $shimPath = Join-Path $tempRoot 'sample.cmd'
             (Test-Path -LiteralPath $shimPath -PathType Leaf) | Should Be $true
@@ -79,7 +86,7 @@ Describe 'Runtime mutation helpers' {
         $tempLocalAppData = Join-Path $tempRoot 'LocalAppData'
         $wtSettingsDir = Join-Path $tempLocalAppData 'Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState'
         $wtSettingsPath = Join-Path $wtSettingsDir 'settings.json'
-        $script:DryRun = $false
+        $runtimeContext = New-EnableUnixToolsRuntimeContext -PathScope 'User' -DryRun:$false
 
         try {
             New-Item -ItemType Directory -Path $wtSettingsDir -Force | Out-Null
@@ -95,7 +102,7 @@ Describe 'Runtime mutation helpers' {
             $env:APPDATA = $tempAppData
             $env:LOCALAPPDATA = $tempLocalAppData
 
-            Set-TerminalFontConfig
+            Set-TerminalFontConfig -RuntimeContext $runtimeContext
 
             $wtSettings = Get-Content -Path $wtSettingsPath -Raw
             ($wtSettings -match '"face"\s*:\s*"CaskaydiaCove NF"') | Should Be $true

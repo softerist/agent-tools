@@ -51,10 +51,14 @@ function Test-OptionalToolAvailable {
 }
 
 function Get-CatalogPath {
-    param([Parameter(Mandatory = $true)][string]$Name)
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [psobject]$RuntimeContext
+    )
 
-    $repoRoot = if ($script:EnableUnixToolsRepoRoot) {
-        $script:EnableUnixToolsRepoRoot
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    $repoRoot = if (-not [string]::IsNullOrWhiteSpace($RuntimeContext.RepoRoot)) {
+        $RuntimeContext.RepoRoot
     }
     elseif ($PSScriptRoot) {
         Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
@@ -67,9 +71,12 @@ function Get-CatalogPath {
 }
 
 function Read-CatalogJson {
-    param([Parameter(Mandatory = $true)][string]$Name)
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [psobject]$RuntimeContext
+    )
 
-    $path = Get-CatalogPath -Name $Name
+    $path = Get-CatalogPath -Name $Name -RuntimeContext $RuntimeContext
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Catalog not found: $path"
     }
@@ -83,23 +90,34 @@ function Read-CatalogJson {
 }
 
 function Get-OptionalToolCatalog {
-    return @(Read-CatalogJson -Name 'optional-tools.json')
+    param([psobject]$RuntimeContext)
+
+    return @(Read-CatalogJson -Name 'optional-tools.json' -RuntimeContext $RuntimeContext)
 }
 
 function Get-OptionalPowerShellModuleCatalog {
-    return @(Read-CatalogJson -Name 'optional-modules.json')
+    param([psobject]$RuntimeContext)
+
+    return @(Read-CatalogJson -Name 'optional-modules.json' -RuntimeContext $RuntimeContext)
 }
 
 function Get-SmartShellOptionalModuleNameSet {
-    return @(Get-OptionalPowerShellModuleCatalog | Select-Object -ExpandProperty ModuleName)
+    param([psobject]$RuntimeContext)
+
+    return @(Get-OptionalPowerShellModuleCatalog -RuntimeContext $RuntimeContext | Select-Object -ExpandProperty ModuleName)
 }
 
 function Get-CoreShimToolCatalog {
-    return @(Read-CatalogJson -Name 'core-shim-tools.json')
+    param([psobject]$RuntimeContext)
+
+    return @(Read-CatalogJson -Name 'core-shim-tools.json' -RuntimeContext $RuntimeContext)
 }
 
 function Get-OptionalToolsStatePath {
-    $base = if ($script:PathScope -eq "User") {
+    param([psobject]$RuntimeContext)
+
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    $base = if ($RuntimeContext.PathScope -eq "User") {
         if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:USERPROFILE }
     }
     else {
@@ -110,7 +128,9 @@ function Get-OptionalToolsStatePath {
 }
 
 function Read-OptionalToolState {
-    $statePath = Get-OptionalToolsStatePath
+    param([psobject]$RuntimeContext)
+
+    $statePath = Get-OptionalToolsStatePath -RuntimeContext $RuntimeContext
     if (-not (Test-Path $statePath)) { return @() }
 
     try {
@@ -124,11 +144,17 @@ function Read-OptionalToolState {
     }
 }
 
-function Write-OptionalToolState([object[]]$Records) {
-    $statePath = Get-OptionalToolsStatePath
+function Write-OptionalToolState {
+    param(
+        [object[]]$Records,
+        [psobject]$RuntimeContext
+    )
+
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    $statePath = Get-OptionalToolsStatePath -RuntimeContext $RuntimeContext
     $stateDir = Split-Path -Parent $statePath
     if ($stateDir -and -not (Test-Path $stateDir)) {
-        if ($script:DryRun) {
+        if ($RuntimeContext.DryRun) {
             Write-DryRun "New-Item -ItemType Directory -Path '$stateDir'"
         }
         else {
@@ -138,7 +164,7 @@ function Write-OptionalToolState([object[]]$Records) {
 
     if (-not $Records -or $Records.Count -eq 0) {
         if (Test-Path $statePath) {
-            if ($script:DryRun) {
+            if ($RuntimeContext.DryRun) {
                 Write-DryRun "Remove-Item -Path '$statePath'"
             }
             else {
@@ -149,16 +175,22 @@ function Write-OptionalToolState([object[]]$Records) {
     }
 
     $json = $Records | ConvertTo-Json -Depth 6
-    Write-AtomicUtf8File -Path $statePath -Content $json
+    Write-AtomicUtf8File -Path $statePath -Content $json -RuntimeContext $RuntimeContext
 }
 
-function Install-MissingOptionalPowerShellModuleSet([object[]]$Catalog) {
+function Install-MissingOptionalPowerShellModuleSet {
+    param(
+        [object[]]$Catalog,
+        [psobject]$RuntimeContext
+    )
+
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
     if (-not $Catalog -or $Catalog.Count -eq 0) { return @() }
 
     $psResource = Get-Command Install-PSResource -ErrorAction SilentlyContinue
     $powerShellGet = Get-Command Install-Module -ErrorAction SilentlyContinue
     if (-not $psResource -and -not $powerShellGet) {
-        Write-Status -Type warn -Label "No module installer" -Detail "PowerShell modules cannot be auto-installed"
+        Write-Status -Type warn -Label "No module installer" -Detail "PowerShell modules cannot be auto-installed" -RuntimeContext $RuntimeContext
         return @()
     }
 
@@ -176,7 +208,7 @@ function Install-MissingOptionalPowerShellModuleSet([object[]]$Catalog) {
         $managerUsed = $null
 
         try {
-            if ($script:DryRun) {
+            if ($RuntimeContext.DryRun) {
                 if ($psResource) {
                     Write-DryRun "Install-PSResource $moduleName -Repository $repository -Scope CurrentUser -TrustRepository -Quiet"
                     $managerUsed = "psresourceget"
@@ -199,12 +231,12 @@ function Install-MissingOptionalPowerShellModuleSet([object[]]$Catalog) {
             }
         }
         catch {
-            Write-Status -Type warn -Label "Module install failed" -Detail "${moduleName}: $($_.Exception.Message)" -Indent
+            Write-Status -Type warn -Label "Module install failed" -Detail "${moduleName}: $($_.Exception.Message)" -Indent -RuntimeContext $RuntimeContext
         }
 
-        if (-not $script:DryRun -and $installed -and -not (Get-Module -ListAvailable $moduleName)) {
+        if (-not $RuntimeContext.DryRun -and $installed -and -not (Get-Module -ListAvailable $moduleName)) {
             $installed = $false
-            Write-Status -Type warn -Label "Module missing" -Detail "$moduleName not detected after install" -Indent
+            Write-Status -Type warn -Label "Module missing" -Detail "$moduleName not detected after install" -Indent -RuntimeContext $RuntimeContext
         }
 
         if ($installed) {
@@ -215,14 +247,14 @@ function Install-MissingOptionalPowerShellModuleSet([object[]]$Catalog) {
                 Manager       = $managerUsed
                 PackageId     = $moduleName
                 InstalledAt   = (Get-Date).ToString("o")
-                ScriptVersion = $script:EnableUnixToolsVersion
+                ScriptVersion = $RuntimeContext.Version
             }
-            Write-Status -Type ok -Label "Module installed" -Detail "$moduleName via $managerUsed" -Indent
+            Write-Status -Type ok -Label "Module installed" -Detail "$moduleName via $managerUsed" -Indent -RuntimeContext $RuntimeContext
         }
     }
 
     if ($newlyInstalled.Count -gt 0) {
-        $existing = @(Read-OptionalToolState)
+        $existing = @(Read-OptionalToolState -RuntimeContext $RuntimeContext)
         $records = New-Object System.Collections.Generic.List[object]
         $moduleMap = @{}
 
@@ -245,16 +277,22 @@ function Install-MissingOptionalPowerShellModuleSet([object[]]$Catalog) {
             $records.Add($item) | Out-Null
         }
 
-        Write-OptionalToolState -Records @($records)
+        Write-OptionalToolState -Records @($records) -RuntimeContext $RuntimeContext
     }
 
     return $newlyInstalled
 }
 
-function Install-MissingOptionalToolSet([object[]]$Catalog) {
+function Install-MissingOptionalToolSet {
+    param(
+        [object[]]$Catalog,
+        [psobject]$RuntimeContext
+    )
+
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
     if (-not $Catalog -or $Catalog.Count -eq 0) { return @() }
 
-    $pmProbe = @(Initialize-OptionalPackageManagerSet)
+    $pmProbe = @(Initialize-OptionalPackageManagerSet -RuntimeContext $RuntimeContext)
     $pm = @(
         $pmProbe | Where-Object {
             $_ -and
@@ -265,7 +303,7 @@ function Install-MissingOptionalToolSet([object[]]$Catalog) {
     ) | Select-Object -Last 1
 
     if (-not $pm) {
-        Write-Status -Type warn -Label "No package manager" -Detail "missing tools cannot be auto-installed"
+        Write-Status -Type warn -Label "No package manager" -Detail "missing tools cannot be auto-installed" -RuntimeContext $RuntimeContext
         Write-PackageManagerInstallGuidance
         return @()
     }
@@ -283,7 +321,7 @@ function Install-MissingOptionalToolSet([object[]]$Catalog) {
         )
 
         if ($missingCommands.Count -gt 0) {
-            Write-Status -Type warn -Label "No package manager" -Detail "cannot auto-install missing tools"
+            Write-Status -Type warn -Label "No package manager" -Detail "cannot auto-install missing tools" -RuntimeContext $RuntimeContext
             Write-Dim "Missing: $($missingCommands -join ', ')"
             Write-PackageManagerInstallGuidance
         }
@@ -314,7 +352,7 @@ function Install-MissingOptionalToolSet([object[]]$Catalog) {
         if ($wingetAvailable -and $tool.WingetId) {
             $attempted += "winget"
             Write-Dim "Installing $toolLabel via winget ($($tool.WingetId))..."
-            if ($script:DryRun) {
+            if ($RuntimeContext.DryRun) {
                 Write-DryRun "winget install --id $($tool.WingetId) ..."
                 $exitCode = 0
             }
@@ -332,7 +370,7 @@ function Install-MissingOptionalToolSet([object[]]$Catalog) {
         if (-not $installed -and $chocoAvailable -and $tool.ChocoId) {
             $attempted += "choco"
             Write-Dim "Installing $toolLabel via choco ($($tool.ChocoId))..."
-            if ($script:DryRun) {
+            if ($RuntimeContext.DryRun) {
                 Write-DryRun "choco install $($tool.ChocoId) -y"
                 $exitCode = 0
             }
@@ -364,12 +402,12 @@ function Install-MissingOptionalToolSet([object[]]$Catalog) {
                 Manager       = $managerUsed
                 PackageId     = $packageIdUsed
                 InstalledAt   = (Get-Date).ToString("o")
-                ScriptVersion = $script:EnableUnixToolsVersion
+                ScriptVersion = $RuntimeContext.Version
             }
-            Write-Status -Type ok -Label "Installed" -Detail "$toolLabel via $managerUsed" -Indent
+            Write-Status -Type ok -Label "Installed" -Detail "$toolLabel via $managerUsed" -Indent -RuntimeContext $RuntimeContext
         }
         else {
-            Write-Status -Type info -Label "Not installed" -Detail $toolLabel -Indent
+            Write-Status -Type info -Label "Not installed" -Detail $toolLabel -Indent -RuntimeContext $RuntimeContext
             if ($attempted.Count -gt 0) {
                 Write-Dim "Attempted via: $($attempted -join ', ')" -Indent
                 $exitDetails = @()
@@ -386,7 +424,7 @@ function Install-MissingOptionalToolSet([object[]]$Catalog) {
     }
 
     if ($newlyInstalled.Count -gt 0) {
-        $existing = @(Read-OptionalToolState)
+        $existing = @(Read-OptionalToolState -RuntimeContext $RuntimeContext)
         $byKey = @{}
         foreach ($item in $existing) {
             $key = if ($item.PSObject.Properties['Kind'] -and [string]$item.Kind -eq 'Package') {
@@ -409,14 +447,17 @@ function Install-MissingOptionalToolSet([object[]]$Catalog) {
             if (-not [string]::IsNullOrWhiteSpace($key)) { $byKey[$key] = $item }
         }
         $merged = @($byKey.Values | Sort-Object @{ Expression = { Get-OptionalToolDisplayName -Tool $_ } })
-        Write-OptionalToolState -Records $merged
+        Write-OptionalToolState -Records $merged -RuntimeContext $RuntimeContext
         Update-SessionPath
     }
     return $newlyInstalled
 }
 
 function Uninstall-TrackedOptionalToolSet {
-    $tracked = @(Read-OptionalToolState)
+    param([psobject]$RuntimeContext)
+
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    $tracked = @(Read-OptionalToolState -RuntimeContext $RuntimeContext)
     if ($tracked.Count -eq 0) { return 0 }
 
     $removedCount = 0
@@ -436,7 +477,7 @@ function Uninstall-TrackedOptionalToolSet {
 
             $ok = $false
             try {
-                if ($script:DryRun) {
+                if ($RuntimeContext.DryRun) {
                     if ($manager -eq "psresourceget") {
                         Write-DryRun "Uninstall-PSResource $moduleName"
                     }
@@ -455,12 +496,12 @@ function Uninstall-TrackedOptionalToolSet {
                 }
             }
             catch {
-                Write-Status -Type warn -Label "Module uninstall failed" -Detail "${moduleName}: $($_.Exception.Message)"
+                Write-Status -Type warn -Label "Module uninstall failed" -Detail "${moduleName}: $($_.Exception.Message)" -RuntimeContext $RuntimeContext
             }
 
             if ($ok) {
                 $removedCount++
-                Write-Status -Type ok -Label "Module removed" -Detail $moduleName
+                Write-Status -Type ok -Label "Module removed" -Detail $moduleName -RuntimeContext $RuntimeContext
             }
             else {
                 $remaining += $item
@@ -480,7 +521,7 @@ function Uninstall-TrackedOptionalToolSet {
                     break
                 }
                 Write-Dim "Uninstalling optional tool: $toolLabel via winget ($packageId)..."
-                if ($script:DryRun) {
+                if ($RuntimeContext.DryRun) {
                     Write-DryRun "winget uninstall --id $packageId ..."
                     $exitCode = 0
                 }
@@ -495,7 +536,7 @@ function Uninstall-TrackedOptionalToolSet {
                     break
                 }
                 Write-Dim "Uninstalling optional tool: $toolLabel via choco ($packageId)..."
-                if ($script:DryRun) {
+                if ($RuntimeContext.DryRun) {
                     Write-DryRun "choco uninstall $packageId -y"
                     $exitCode = 0
                 }
@@ -512,14 +553,14 @@ function Uninstall-TrackedOptionalToolSet {
 
         if ($ok) {
             $removedCount++
-            Write-Status -Type ok -Label "Optional tool removed" -Detail $toolLabel
+            Write-Status -Type ok -Label "Optional tool removed" -Detail $toolLabel -RuntimeContext $RuntimeContext
         }
         else {
             $remaining += $item
         }
     }
 
-    Write-OptionalToolState -Records $remaining
+    Write-OptionalToolState -Records $remaining -RuntimeContext $RuntimeContext
     if ($removedCount -gt 0) {
         Update-SessionPath
     }

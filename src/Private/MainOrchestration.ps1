@@ -1,17 +1,22 @@
 function Get-ExecutionContext {
-    param([switch]$AllowMissingGit)
+    param(
+        [switch]$AllowMissingGit,
+        [psobject]$RuntimeContext
+    )
+
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
 
     $gitRoot = $null
     try {
         $gitRoot = Get-GitRoot
-        Write-Status -Type detail -Label "Git discovered" -Detail $gitRoot
+        Write-Status -Type detail -Label "Git discovered" -Detail $gitRoot -RuntimeContext $RuntimeContext
     }
     catch {
         if (-not $AllowMissingGit) {
             throw
         }
 
-        Write-Status -Type info -Label "Git not found" -Detail "uninstall will clean known paths"
+        Write-Status -Type info -Label "Git not found" -Detail "uninstall will clean known paths" -RuntimeContext $RuntimeContext
     }
 
     $gitUsrBin = $null
@@ -25,7 +30,7 @@ function Get-ExecutionContext {
         $gitUsrBin = Join-Path $gitRoot 'usr\bin'
         $gitMingwBin = Join-Path $gitRoot 'mingw64\bin'
         $gitCmd = Join-Path $gitRoot 'cmd'
-        if ($script:PathScope -eq 'User') {
+        if ($RuntimeContext.PathScope -eq 'User') {
             $shimDir = $userShimDir
         }
         else {
@@ -40,26 +45,27 @@ function Get-ExecutionContext {
         GitCmd              = $gitCmd
         ShimDir             = $shimDir
         UserShimDir         = $userShimDir
-        OptionalToolCatalog = @(Get-OptionalToolCatalog)
-        OptionalModuleCatalog = @(Get-OptionalPowerShellModuleCatalog)
+        OptionalToolCatalog = @(Get-OptionalToolCatalog -RuntimeContext $RuntimeContext)
+        OptionalModuleCatalog = @(Get-OptionalPowerShellModuleCatalog -RuntimeContext $RuntimeContext)
     }
 }
 
 function Invoke-FontUninstallFlow {
     param(
         [Parameter(Mandatory = $true)][psobject]$State,
-        [switch]$HasAdditionalActions
+        [switch]$HasAdditionalActions,
+        [psobject]$RuntimeContext
     )
 
-    Write-Section 'Uninstall Font'
-    if (Uninstall-NerdFont) {
+    Write-Section 'Uninstall Font' -RuntimeContext $RuntimeContext
+    if (Uninstall-NerdFont -RuntimeContext $RuntimeContext) {
         $State.DidChange = $true
         Send-EnvironmentChange
         Update-SessionPath
     }
 
     if (-not $HasAdditionalActions) {
-        Write-Footer -Message 'Font uninstall complete' -Type ok
+        Write-Footer -Message 'Font uninstall complete' -Type ok -RuntimeContext $RuntimeContext
         return $true
     }
 
@@ -72,12 +78,13 @@ function Invoke-UninstallFlow {
         [Parameter(Mandatory = $true)]$Cmdlet,
         [Parameter(Mandatory = $true)][psobject]$State,
         [Parameter(Mandatory = $true)][psobject]$Context,
-        [switch]$UninstallOptionalTools
+        [switch]$UninstallOptionalTools,
+        [Parameter(Mandatory = $true)][psobject]$RuntimeContext
     )
 
-    Write-Section 'Uninstall'
+    Write-Section 'Uninstall' -RuntimeContext $RuntimeContext
 
-    if ($script:PathScope -eq 'User') {
+    if ($RuntimeContext.PathScope -eq 'User') {
         $candidateShimDirs = @($Context.UserShimDir)
         if ($Context.ShimDir) { $candidateShimDirs += $Context.ShimDir }
     }
@@ -91,14 +98,14 @@ function Invoke-UninstallFlow {
     $candidateShimDirs = @($candidateShimDirs | Select-Object -Unique)
 
     if ($Cmdlet.ShouldProcess($PROFILE.CurrentUserCurrentHost, 'Remove unix-tools profile shim blocks')) {
-        $removalResult = Remove-InstalledProfileSupport
+        $removalResult = Remove-InstalledProfileSupport -RuntimeContext $RuntimeContext
         $State.DidChange = $true
         $removalDetail = if ($removalResult.Status -eq 'Removed') { 'unix-tools markers cleaned + legacy inline block removed' } else { 'unix-tools markers cleaned' }
-        Write-Status -Type ok -Label 'Profile blocks removed' -Detail $removalDetail
+        Write-Status -Type ok -Label 'Profile blocks removed' -Detail $removalDetail -RuntimeContext $RuntimeContext
     }
 
     $legacyFastScriptCandidates = @()
-    if ($script:PathScope -eq 'User') {
+    if ($RuntimeContext.PathScope -eq 'User') {
         if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
             $legacyFastScriptCandidates += (Join-Path $env:LOCALAPPDATA 'UnixTools\Enable-UnixToolsFast.ps1')
         }
@@ -115,7 +122,7 @@ function Invoke-UninstallFlow {
     foreach ($legacyFastPath in ($legacyFastScriptCandidates | Select-Object -Unique)) {
         if (-not (Test-Path -LiteralPath $legacyFastPath -PathType Leaf)) { continue }
         if ($Cmdlet.ShouldProcess($legacyFastPath, 'Remove legacy Enable-UnixToolsFast.ps1 copy')) {
-            if ($script:DryRun) {
+            if ($RuntimeContext.DryRun) {
                 Write-DryRun "Remove-Item '$legacyFastPath' -Force"
             }
             else {
@@ -129,21 +136,21 @@ function Invoke-UninstallFlow {
                 }
             }
             $State.DidChange = $true
-            Write-Status -Type ok -Label 'Legacy script removed' -Detail (Split-Path $legacyFastPath -Leaf)
+            Write-Status -Type ok -Label 'Legacy script removed' -Detail (Split-Path $legacyFastPath -Leaf) -RuntimeContext $RuntimeContext
         }
     }
 
     foreach ($shimDirPath in $candidateShimDirs) {
-        if ($Cmdlet.ShouldProcess($script:PathDisplay, "Remove shim directory entry $shimDirPath")) {
-            if (Remove-MachinePathEntry -pathsToRemove @($shimDirPath)) {
+        if ($Cmdlet.ShouldProcess($RuntimeContext.PathDisplay, "Remove shim directory entry $shimDirPath")) {
+            if (Remove-MachinePathEntry -pathsToRemove @($shimDirPath) -RuntimeContext $RuntimeContext) {
                 $State.DidChange = $true
-                Write-Status -Type ok -Label 'PATH entry removed' -Detail $shimDirPath
+                Write-Status -Type ok -Label 'PATH entry removed' -Detail $shimDirPath -RuntimeContext $RuntimeContext
             }
         }
 
         if (Test-Path $shimDirPath -PathType Container) {
             if ($Cmdlet.ShouldProcess($shimDirPath, 'Delete generated .cmd shims')) {
-                if ($script:DryRun) {
+                if ($RuntimeContext.DryRun) {
                     Write-DryRun "Remove shim files from '$shimDirPath'"
                 }
                 else {
@@ -156,37 +163,37 @@ function Invoke-UninstallFlow {
                     }
                 }
                 $State.DidChange = $true
-                Write-Status -Type ok -Label 'Shim files removed' -Detail $shimDirPath
+                Write-Status -Type ok -Label 'Shim files removed' -Detail $shimDirPath -RuntimeContext $RuntimeContext
             }
         }
     }
 
     if ($UninstallOptionalTools) {
         if ($Cmdlet.ShouldProcess('Optional tools', 'Uninstall optional tools previously installed by this script')) {
-            $removedOptional = Uninstall-TrackedOptionalToolSet
+            $removedOptional = Uninstall-TrackedOptionalToolSet -RuntimeContext $RuntimeContext
             if ($removedOptional -gt 0) {
                 $State.DidChange = $true
-                Write-Status -Type ok -Label 'Optional items removed' -Detail "$removedOptional item(s)"
+                Write-Status -Type ok -Label 'Optional items removed' -Detail "$removedOptional item(s)" -RuntimeContext $RuntimeContext
             }
             else {
-                Write-Status -Type info -Label 'Optional tools' -Detail 'none tracked'
+                Write-Status -Type info -Label 'Optional tools' -Detail 'none tracked' -RuntimeContext $RuntimeContext
             }
         }
     }
     else {
-        Write-Status -Type info -Label 'Optional tools' -Detail 'preserved (use -UninstallOptionalTools to remove tracked items)'
+        Write-Status -Type info -Label 'Optional tools' -Detail 'preserved (use -UninstallOptionalTools to remove tracked items)' -RuntimeContext $RuntimeContext
     }
 
     if ($State.DidChange) {
         Send-EnvironmentChange
         Update-SessionPath
-        Write-Status -Type ok -Label 'Environment refreshed' -Detail 'WM_SETTINGCHANGE broadcasted'
+        Write-Status -Type ok -Label 'Environment refreshed' -Detail 'WM_SETTINGCHANGE broadcasted' -RuntimeContext $RuntimeContext
     }
     else {
-        Write-Status -Type info -Label 'Nothing to uninstall'
+        Write-Status -Type info -Label 'Nothing to uninstall' -RuntimeContext $RuntimeContext
     }
 
-    Write-Footer -Message 'Uninstall complete' -Type ok
+    Write-Footer -Message 'Uninstall complete' -Type ok -RuntimeContext $RuntimeContext
 }
 
 function Invoke-PathConfigurationFlow {
@@ -199,47 +206,48 @@ function Invoke-PathConfigurationFlow {
         [switch]$AddGitCmd,
         [switch]$NormalizePath,
         [switch]$InstallTerminalSetup,
-        [Parameter(Mandatory = $true)][string]$ThemesDir
+        [Parameter(Mandatory = $true)][string]$ThemesDir,
+        [Parameter(Mandatory = $true)][psobject]$RuntimeContext
     )
 
-    Write-Section 'Path Configuration'
+    Write-Section 'Path Configuration' -RuntimeContext $RuntimeContext
 
     $pathsToAdd = @($Context.GitUsrBin)
 
     if ($AddMingw) {
         if (Test-Path $Context.GitMingwBin) { $pathsToAdd += $Context.GitMingwBin }
-        else { Write-Status -Type info -Label 'mingw64\bin' -Detail 'not found, skipping' }
+        else { Write-Status -Type info -Label 'mingw64\bin' -Detail 'not found, skipping' -RuntimeContext $RuntimeContext }
     }
 
     if ($AddGitCmd) {
         if (Test-Path $Context.GitCmd) { $pathsToAdd += $Context.GitCmd }
-        else { Write-Status -Type info -Label 'cmd' -Detail 'not found, skipping' }
+        else { Write-Status -Type info -Label 'cmd' -Detail 'not found, skipping' -RuntimeContext $RuntimeContext }
     }
 
     $changed = $false
-    if ($Cmdlet.ShouldProcess($script:PathDisplay, 'Add tool directories')) {
-        $changed = Add-MachinePathEntry $pathsToAdd
+    if ($Cmdlet.ShouldProcess($RuntimeContext.PathDisplay, 'Add tool directories')) {
+        $changed = Add-MachinePathEntry -pathsToAdd $pathsToAdd -RuntimeContext $RuntimeContext
     }
 
     if ($changed) {
         $State.DidChange = $true
-        Write-Status -Type ok -Label 'Tool directories added' -Detail "to $($script:PathDisplay)"
+        Write-Status -Type ok -Label 'Tool directories added' -Detail "to $($RuntimeContext.PathDisplay)" -RuntimeContext $RuntimeContext
     }
     else {
-        Write-Status -Type ok -Label 'Tool directories' -Detail "already in $($script:PathDisplay)"
+        Write-Status -Type ok -Label 'Tool directories' -Detail "already in $($RuntimeContext.PathDisplay)" -RuntimeContext $RuntimeContext
     }
 
     if ($NormalizePath) {
-        if ($Cmdlet.ShouldProcess($script:PathDisplay, 'Normalize PATH entries')) {
-            Update-MachinePathEntry
+        if ($Cmdlet.ShouldProcess($RuntimeContext.PathDisplay, 'Normalize PATH entries')) {
+            Update-MachinePathEntry -RuntimeContext $RuntimeContext
             $State.DidChange = $true
-            Write-Status -Type ok -Label 'PATH normalized' -Detail 'removed duplicates/trailing slashes'
+            Write-Status -Type ok -Label 'PATH normalized' -Detail 'removed duplicates/trailing slashes' -RuntimeContext $RuntimeContext
         }
     }
 
     if ($InstallTerminalSetup) {
         if ($Cmdlet.ShouldProcess('Terminal Setup', 'Install Oh My Posh themes and Nerd Fonts')) {
-            Install-TerminalSetup -ThemesDir $ThemesDir
+            Install-TerminalSetup -ThemesDir $ThemesDir -RuntimeContext $RuntimeContext
             $State.DidChange = $true
         }
     }
@@ -251,7 +259,8 @@ function Invoke-OptionalToolFlow {
         [Parameter(Mandatory = $true)]$Cmdlet,
         [Parameter(Mandatory = $true)][psobject]$State,
         [Parameter(Mandatory = $true)][psobject]$Context,
-        [switch]$InstallOptionalTools
+        [switch]$InstallOptionalTools,
+        [Parameter(Mandatory = $true)][psobject]$RuntimeContext
     )
 
     if (-not $InstallOptionalTools) {
@@ -261,7 +270,7 @@ function Invoke-OptionalToolFlow {
     $optionalToolCatalog = @($Context.OptionalToolCatalog)
     $optionalModuleCatalog = @($Context.OptionalModuleCatalog)
 
-    Write-Section 'Optional Tools'
+    Write-Section 'Optional Tools' -RuntimeContext $RuntimeContext
     if ($Cmdlet.ShouldProcess('Optional tools', 'Install missing optional tools via package managers')) {
         $presentBefore = @($optionalToolCatalog | Where-Object {
                 Test-OptionalToolAvailable -Tool $_
@@ -270,8 +279,8 @@ function Invoke-OptionalToolFlow {
                 $_.ModuleName -and (Get-Module -ListAvailable ([string]$_.ModuleName))
             } | ForEach-Object { [string]$_.ModuleName })
 
-        $installedOptional = @(Install-MissingOptionalToolSet -Catalog $optionalToolCatalog)
-        $installedOptionalModules = @(Install-MissingOptionalPowerShellModuleSet -Catalog $optionalModuleCatalog)
+        $installedOptional = @(Install-MissingOptionalToolSet -Catalog $optionalToolCatalog -RuntimeContext $RuntimeContext)
+        $installedOptionalModules = @(Install-MissingOptionalPowerShellModuleSet -Catalog $optionalModuleCatalog -RuntimeContext $RuntimeContext)
         Update-SessionPath
 
         $presentAfter = @($optionalToolCatalog | Where-Object {
@@ -296,47 +305,47 @@ function Invoke-OptionalToolFlow {
         $missingModulesAfter = @($missingModulesAfter | Sort-Object -Unique)
 
         if ($alreadyPresent.Count -gt 0) {
-            Write-Status -Type ok -Label "$($alreadyPresent.Count) present before run" -Detail ($alreadyPresent -join ' ')
+            Write-Status -Type ok -Label "$($alreadyPresent.Count) present before run" -Detail ($alreadyPresent -join ' ') -RuntimeContext $RuntimeContext
         }
 
         if ($newlyDetected.Count -gt 0) {
-            Write-Status -Type ok -Label "$($newlyDetected.Count) present after install attempt" -Detail ($newlyDetected -join ' ')
+            Write-Status -Type ok -Label "$($newlyDetected.Count) present after install attempt" -Detail ($newlyDetected -join ' ') -RuntimeContext $RuntimeContext
         }
 
         if ($installedOptional.Count -gt 0) {
             $State.DidChange = $true
-            Write-Status -Type ok -Label "$($installedOptional.Count) newly installed"
+            Write-Status -Type ok -Label "$($installedOptional.Count) newly installed" -RuntimeContext $RuntimeContext
         }
 
         if ($alreadyPresentModules.Count -gt 0) {
-            Write-Status -Type ok -Label "$($alreadyPresentModules.Count) modules present" -Detail ($alreadyPresentModules -join ', ')
+            Write-Status -Type ok -Label "$($alreadyPresentModules.Count) modules present" -Detail ($alreadyPresentModules -join ', ') -RuntimeContext $RuntimeContext
         }
 
         if ($newModulesDetected.Count -gt 0) {
-            Write-Status -Type ok -Label "$($newModulesDetected.Count) modules present after install" -Detail ($newModulesDetected -join ', ')
+            Write-Status -Type ok -Label "$($newModulesDetected.Count) modules present after install" -Detail ($newModulesDetected -join ', ') -RuntimeContext $RuntimeContext
         }
 
         if ($installedOptionalModules.Count -gt 0) {
             $State.DidChange = $true
-            Write-Status -Type ok -Label "$($installedOptionalModules.Count) modules newly installed"
+            Write-Status -Type ok -Label "$($installedOptionalModules.Count) modules newly installed" -RuntimeContext $RuntimeContext
         }
 
         if ($missingAfter.Count -gt 0) {
-            Write-Status -Type warn -Label "$($missingAfter.Count) still missing" -Detail ($missingAfter -join ', ')
+            Write-Status -Type warn -Label "$($missingAfter.Count) still missing" -Detail ($missingAfter -join ', ') -RuntimeContext $RuntimeContext
         }
         else {
-            Write-Status -Type ok -Label 'All optional tools available after run' -Detail ($presentAfter -join ' ')
+            Write-Status -Type ok -Label 'All optional tools available after run' -Detail ($presentAfter -join ' ') -RuntimeContext $RuntimeContext
         }
 
         if ($missingModulesAfter.Count -gt 0) {
-            Write-Status -Type warn -Label "$($missingModulesAfter.Count) modules still missing" -Detail ($missingModulesAfter -join ', ')
+            Write-Status -Type warn -Label "$($missingModulesAfter.Count) modules still missing" -Detail ($missingModulesAfter -join ', ') -RuntimeContext $RuntimeContext
         }
         else {
-            Write-Status -Type ok -Label 'All optional modules available after run' -Detail ($presentModulesAfter -join ', ')
+            Write-Status -Type ok -Label 'All optional modules available after run' -Detail ($presentModulesAfter -join ', ') -RuntimeContext $RuntimeContext
         }
     }
     else {
-        Write-Status -Type skip -Label 'Optional tools' -Detail 'skipped by -WhatIf/-Confirm'
+        Write-Status -Type skip -Label 'Optional tools' -Detail 'skipped by -WhatIf/-Confirm' -RuntimeContext $RuntimeContext
     }
 }
 
@@ -347,7 +356,8 @@ function Invoke-ShimFlow {
         [Parameter(Mandatory = $true)][psobject]$State,
         [Parameter(Mandatory = $true)][psobject]$Context,
         [switch]$CreateShims,
-        [switch]$AddMingw
+        [switch]$AddMingw,
+        [Parameter(Mandatory = $true)][psobject]$RuntimeContext
     )
 
     if (-not $CreateShims) {
@@ -356,18 +366,18 @@ function Invoke-ShimFlow {
 
     $optionalToolCatalog = @($Context.OptionalToolCatalog)
 
-    Write-Section 'Shims'
-    if ($Cmdlet.ShouldProcess($Context.ShimDir, "Create/refresh shim .cmd files and prepend shim dir to $($script:PathDisplay)")) {
-        New-DirectoryIfMissing $Context.ShimDir
+    Write-Section 'Shims' -RuntimeContext $RuntimeContext
+    if ($Cmdlet.ShouldProcess($Context.ShimDir, "Create/refresh shim .cmd files and prepend shim dir to $($RuntimeContext.PathDisplay)")) {
+        New-DirectoryIfMissing -dir $Context.ShimDir -RuntimeContext $RuntimeContext
 
-        if ($script:DryRun) {
+        if ($RuntimeContext.DryRun) {
             Write-DryRun "Clear stale shims in '$($Context.ShimDir)'"
         }
         else {
             Get-ChildItem $Context.ShimDir -Filter *.cmd -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
         }
 
-        $toolsToShim = Get-CoreShimToolCatalog
+        $toolsToShim = Get-CoreShimToolCatalog -RuntimeContext $RuntimeContext
         $externalTools = @(
             $optionalToolCatalog |
             ForEach-Object { Get-OptionalToolCommandName -Tool $_ } |
@@ -391,7 +401,7 @@ function Invoke-ShimFlow {
                 }
             }
             if ($toolPath) {
-                if (Write-ShimCmd -shimDir $Context.ShimDir -name $tool -targetExePath $toolPath) { $shimmed++ }
+                if (Write-ShimCmd -shimDir $Context.ShimDir -name $tool -targetExePath $toolPath -RuntimeContext $RuntimeContext) { $shimmed++ }
             }
             else {
                 $notFound++
@@ -402,27 +412,27 @@ function Invoke-ShimFlow {
         foreach ($tool in $externalTools) {
             $toolPath = Find-ToolInPath -toolName $tool -excludeDir $Context.ShimDir -AppIndex $appIndex
             if ($toolPath) {
-                if (Write-ShimCmd -shimDir $Context.ShimDir -name $tool -targetExePath $toolPath) {
+                if (Write-ShimCmd -shimDir $Context.ShimDir -name $tool -targetExePath $toolPath -RuntimeContext $RuntimeContext) {
                     $shimmed++
                     $externalFound.Add($tool) | Out-Null
                 }
             }
         }
 
-        Add-MachinePathPrepend $Context.ShimDir
+        Add-MachinePathPrepend -pathToPrepend $Context.ShimDir -RuntimeContext $RuntimeContext
 
-        if (-not $script:DryRun) {
+        if (-not $RuntimeContext.DryRun) {
             try {
-                if ($script:PathScope -eq 'User') {
+                if ($RuntimeContext.PathScope -eq 'User') {
                     & icacls $Context.ShimDir /inheritance:r /grant "${env:USERNAME}:(OI)(CI)F" 2>&1 | Out-Null
                 }
                 else {
                     & icacls $Context.ShimDir /inheritance:r /grant 'BUILTIN\Administrators:(OI)(CI)F' /grant 'BUILTIN\Users:(OI)(CI)RX' 2>&1 | Out-Null
                 }
-                Write-Status -Type ok -Label 'ACLs secured' -Detail 'read-only for non-admins'
+                Write-Status -Type ok -Label 'ACLs secured' -Detail 'read-only for non-admins' -RuntimeContext $RuntimeContext
             }
             catch {
-                Write-Status -Type warn -Label 'ACL warning' -Detail $_.Exception.Message
+                Write-Status -Type warn -Label 'ACL warning' -Detail $_.Exception.Message -RuntimeContext $RuntimeContext
             }
         }
         else {
@@ -430,21 +440,21 @@ function Invoke-ShimFlow {
         }
 
         $State.DidChange = $true
-        Write-Status -Type ok -Label "$shimmed shims created" -Detail $Context.ShimDir
-        Write-Status -Type ok -Label 'Shim dir prepended' -Detail "to $($script:PathDisplay) (priority)"
+        Write-Status -Type ok -Label "$shimmed shims created" -Detail $Context.ShimDir -RuntimeContext $RuntimeContext
+        Write-Status -Type ok -Label 'Shim dir prepended' -Detail "to $($RuntimeContext.PathDisplay) (priority)" -RuntimeContext $RuntimeContext
 
         if ($externalFound.Count -gt 0) {
-            Write-Status -Type ok -Label "$($externalFound.Count) external tools" -Detail ($externalFound -join ' ')
+            Write-Status -Type ok -Label "$($externalFound.Count) external tools" -Detail ($externalFound -join ' ') -RuntimeContext $RuntimeContext
         }
 
         if ($notFound -gt 0) {
-            Write-Status -Type info -Label "$notFound tools not found" -Detail '(normal)'
+            Write-Status -Type info -Label "$notFound tools not found" -Detail '(normal)' -RuntimeContext $RuntimeContext
             $missing = @($notFoundTools | Sort-Object -Unique)
             Write-CompactList -Items $missing
         }
     }
     else {
-        Write-Status -Type skip -Label 'Shims' -Detail 'skipped by -WhatIf/-Confirm'
+        Write-Status -Type skip -Label 'Shims' -Detail 'skipped by -WhatIf/-Confirm' -RuntimeContext $RuntimeContext
     }
 }
 
@@ -457,16 +467,17 @@ function Invoke-ProfileSetupFlow {
         [Parameter(Mandatory = $true)][string]$ThemesDir,
         [Parameter(Mandatory = $true)][string]$Theme,
         [Parameter(Mandatory = $true)][string]$ProfileStartupMode,
-        [Parameter(Mandatory = $true)][string]$PromptInitMode
+        [Parameter(Mandatory = $true)][string]$PromptInitMode,
+        [Parameter(Mandatory = $true)][psobject]$RuntimeContext
     )
 
     if (-not $InstallProfileShims) {
         return
     }
 
-    Write-Section 'Profile'
+    Write-Section 'Profile' -RuntimeContext $RuntimeContext
     if ($Cmdlet.ShouldProcess($PROFILE.CurrentUserCurrentHost, 'Install/update unix-tools profile shim blocks')) {
-        Install-ProfileInlineSupport -ThemesDir $ThemesDir -Theme $Theme -StartupMode $ProfileStartupMode -PromptMode $PromptInitMode
+        Install-ProfileInlineSupport -ThemesDir $ThemesDir -Theme $Theme -StartupMode $ProfileStartupMode -PromptMode $PromptInitMode -RuntimeContext $RuntimeContext
         $profilePath = $PROFILE.CurrentUserCurrentHost
         $expectedHash = $null
         if (Test-Path $profilePath) {
@@ -477,29 +488,29 @@ function Invoke-ProfileSetupFlow {
         try {
             if (Test-Path $profilePath) {
                 if ($isElevated) {
-                    Write-Status -Type warn -Label 'Elevated session' -Detail 'reload skipped (open new terminal)'
+                    Write-Status -Type warn -Label 'Elevated session' -Detail 'reload skipped (open new terminal)' -RuntimeContext $RuntimeContext
                 }
                 else {
                     $currentHash = (Get-FileHash -Path $profilePath -Algorithm SHA256).Hash
                     if ($expectedHash -and $currentHash -ne $expectedHash) {
-                        Write-Status -Type warn -Label 'Profile modified' -Detail 'reload skipped for safety'
+                        Write-Status -Type warn -Label 'Profile modified' -Detail 'reload skipped for safety' -RuntimeContext $RuntimeContext
                     }
                     else {
                         . $profilePath
-                        Write-Status -Type ok -Label 'Profile reloaded' -Detail '. `$PROFILE'
+                        Write-Status -Type ok -Label 'Profile reloaded' -Detail '. `$PROFILE' -RuntimeContext $RuntimeContext
                     }
                 }
             }
         }
         catch {
-            Write-Status -Type warn -Label 'Profile reload failed' -Detail $_.Exception.Message
+            Write-Status -Type warn -Label 'Profile reload failed' -Detail $_.Exception.Message -RuntimeContext $RuntimeContext
         }
 
-        Write-Status -Type ok -Label 'Profile shims written' -Detail "managed loader + support files ($ProfileStartupMode / $PromptInitMode)"
+        Write-Status -Type ok -Label 'Profile shims written' -Detail "managed loader + support files ($ProfileStartupMode / $PromptInitMode)" -RuntimeContext $RuntimeContext
         $State.DidChange = $true
     }
     else {
-        Write-Status -Type skip -Label 'Profile shims' -Detail 'skipped by -WhatIf/-Confirm'
+        Write-Status -Type skip -Label 'Profile shims' -Detail 'skipped by -WhatIf/-Confirm' -RuntimeContext $RuntimeContext
     }
 }
 
@@ -508,19 +519,20 @@ function Invoke-VerificationFlow {
         [Parameter(Mandatory = $true)][psobject]$State,
         [switch]$CreateShims,
         [switch]$InstallProfileShims,
-        [switch]$InstallOptionalTools
+        [switch]$InstallOptionalTools,
+        [Parameter(Mandatory = $true)][psobject]$RuntimeContext
     )
 
-    Write-Section 'Environment'
+    Write-Section 'Environment' -RuntimeContext $RuntimeContext
     if ($State.DidChange) {
         Send-EnvironmentChange
-        Write-Status -Type ok -Label 'WM_SETTINGCHANGE' -Detail 'broadcasted'
+        Write-Status -Type ok -Label 'WM_SETTINGCHANGE' -Detail 'broadcasted' -RuntimeContext $RuntimeContext
     }
     else {
-        Write-Status -Type info -Label 'No changes' -Detail 'nothing to broadcast'
+        Write-Status -Type info -Label 'No changes' -Detail 'nothing to broadcast' -RuntimeContext $RuntimeContext
     }
 
-    Write-Section 'Verification'
+    Write-Section 'Verification' -RuntimeContext $RuntimeContext
     Update-SessionPath
 
     $verifyTools = @('grep', 'sed', 'awk', 'find', 'bash')
@@ -532,11 +544,11 @@ function Invoke-VerificationFlow {
     foreach ($tool in $verifyTools) {
         $cmds = @($verifyCommandCache[$tool])
         if (-not $cmds) {
-            Write-Status -Type fail -Label $tool -Detail 'not found (open a NEW terminal)'
+            Write-Status -Type fail -Label $tool -Detail 'not found (open a NEW terminal)' -RuntimeContext $RuntimeContext
             continue
         }
 
-        $ui = $script:UI
+        $ui = $RuntimeContext.Ui
         $top = $cmds | Select-Object -First 3
         $lines = @()
         foreach ($commandInfo in $top) {
@@ -556,28 +568,28 @@ function Invoke-VerificationFlow {
             }
         }
 
-        Write-Status -Type ok -Label $tool -Detail ($lines -join ' | ')
+        Write-Status -Type ok -Label $tool -Detail ($lines -join ' | ') -RuntimeContext $RuntimeContext
     }
 
     if ($InstallProfileShims) {
         $profilePath = $PROFILE.CurrentUserCurrentHost
-        if ($script:DryRun) {
-            Write-Status -Type info -Label 'Profile blocks' -Detail 'skipped in DryRun'
+        if ($RuntimeContext.DryRun) {
+            Write-Status -Type info -Label 'Profile blocks' -Detail 'skipped in DryRun' -RuntimeContext $RuntimeContext
         }
         else {
             $profileState = Get-ProfileInstallationState -ProfilePath $profilePath
 
             if ($profileState.HasManagedBlocks) {
-                Write-Status -Type ok -Label 'Profile blocks' -Detail 'present in `$PROFILE'
+                Write-Status -Type ok -Label 'Profile blocks' -Detail 'present in `$PROFILE' -RuntimeContext $RuntimeContext
             }
             elseif ($profileState.HasMissingBlock -or $profileState.HasAliasBlock -or $profileState.HasSmartShellBlock) {
-                Write-Status -Type warn -Label 'Profile blocks' -Detail 'partial install detected'
+                Write-Status -Type warn -Label 'Profile blocks' -Detail 'partial install detected' -RuntimeContext $RuntimeContext
             }
             elseif ($profileState.HasLegacyFastBlock) {
-                Write-Status -Type warn -Label 'Profile blocks' -Detail 'legacy fast-shim detected (re-run -InstallProfileShims)'
+                Write-Status -Type warn -Label 'Profile blocks' -Detail 'legacy fast-shim detected (re-run -InstallProfileShims)' -RuntimeContext $RuntimeContext
             }
             else {
-                Write-Status -Type fail -Label 'Profile blocks' -Detail 'not found in `$PROFILE'
+                Write-Status -Type fail -Label 'Profile blocks' -Detail 'not found in `$PROFILE' -RuntimeContext $RuntimeContext
             }
 
             $legacyDetail = switch ($profileState.LegacyInlineStatus) {
@@ -588,14 +600,14 @@ function Invoke-VerificationFlow {
             $startupModeDetail = if ([string]::IsNullOrWhiteSpace($profileState.StartupMode)) { 'Unknown' } else { $profileState.StartupMode }
             $promptModeDetail = if ([string]::IsNullOrWhiteSpace($profileState.PromptInitMode)) { 'Unknown' } else { $profileState.PromptInitMode }
 
-            Write-Status -Type info -Label 'Legacy inline shims' -Detail $legacyDetail
-            Write-Status -Type info -Label 'Startup mode' -Detail $startupModeDetail
-            Write-Status -Type info -Label 'Prompt init mode' -Detail $promptModeDetail
+            Write-Status -Type info -Label 'Legacy inline shims' -Detail $legacyDetail -RuntimeContext $RuntimeContext
+            Write-Status -Type info -Label 'Startup mode' -Detail $startupModeDetail -RuntimeContext $RuntimeContext
+            Write-Status -Type info -Label 'Prompt init mode' -Detail $promptModeDetail -RuntimeContext $RuntimeContext
         }
     }
 
-    $ui = $script:UI
-    Write-Footer -Message "Done $($ui.Arrow) open a new terminal to use tools" -Type ok
+    $ui = $RuntimeContext.Ui
+    Write-Footer -Message "Done $($ui.Arrow) open a new terminal to use tools" -Type ok -RuntimeContext $RuntimeContext
 
     $tryCommands = @('grep --version')
     if ($InstallProfileShims) { $tryCommands += @('ls -la', "'stressed' | rev") }

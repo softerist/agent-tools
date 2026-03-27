@@ -1,7 +1,10 @@
 function Start-ScriptTranscript {
     [CmdletBinding(SupportsShouldProcess = $true)]
     [OutputType([bool])]
-    param([string]$Path)
+    param(
+        [string]$Path,
+        [psobject]$RuntimeContext
+    )
 
     if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
     $resolved = [System.IO.Path]::GetFullPath($Path)
@@ -13,15 +16,16 @@ function Start-ScriptTranscript {
     }
 
     $dir = Split-Path -Parent $resolved
-    Initialize-Directory -Path $dir
+    Initialize-Directory -Path $dir -RuntimeContext $RuntimeContext
 
     Start-Transcript -Path $resolved -Append -Force | Out-Null
     return $true
 }
 
 function Test-IsDryRunEnabled {
-    $dryRun = Get-Variable -Scope Script -Name DryRun -ValueOnly -ErrorAction SilentlyContinue
-    return [bool]$dryRun
+    param([psobject]$RuntimeContext)
+
+    return [bool](Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext).DryRun
 }
 
 function Stop-ScriptTranscript {
@@ -37,12 +41,15 @@ function Stop-ScriptTranscript {
 }
 
 function Initialize-Directory {
-    param([string]$Path)
+    param(
+        [string]$Path,
+        [psobject]$RuntimeContext
+    )
 
     if ([string]::IsNullOrWhiteSpace($Path)) { return }
     if (Test-Path -LiteralPath $Path -PathType Container) { return }
 
-    if (Test-IsDryRunEnabled) {
+    if (Test-IsDryRunEnabled -RuntimeContext $RuntimeContext) {
         Write-DryRun "New-Item -ItemType Directory -Path '$Path'"
         return
     }
@@ -54,13 +61,14 @@ function Write-AtomicTextFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content,
-        [ValidateSet('UTF8', 'ASCII')][string]$Encoding = 'UTF8'
+        [ValidateSet('UTF8', 'ASCII')][string]$Encoding = 'UTF8',
+        [psobject]$RuntimeContext
     )
 
     $parent = Split-Path -Parent $Path
-    Initialize-Directory -Path $parent
+    Initialize-Directory -Path $parent -RuntimeContext $RuntimeContext
 
-    if (Test-IsDryRunEnabled) {
+    if (Test-IsDryRunEnabled -RuntimeContext $RuntimeContext) {
         Write-DryRun "Write-AtomicTextFile '$Path' -Encoding $Encoding"
         return
     }
@@ -79,38 +87,45 @@ function Write-AtomicTextFile {
 function Write-AtomicUtf8File {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content,
+        [psobject]$RuntimeContext
     )
 
-    Write-AtomicTextFile -Path $Path -Content $Content -Encoding UTF8
+    Write-AtomicTextFile -Path $Path -Content $Content -Encoding UTF8 -RuntimeContext $RuntimeContext
 }
 
 function Write-AtomicAsciiFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content,
+        [psobject]$RuntimeContext
     )
 
-    Write-AtomicTextFile -Path $Path -Content $Content -Encoding ASCII
+    Write-AtomicTextFile -Path $Path -Content $Content -Encoding ASCII -RuntimeContext $RuntimeContext
 }
 
 function Backup-ProfileFile {
-    param([Parameter(Mandatory = $true)][string]$ProfilePath)
+    param(
+        [Parameter(Mandatory = $true)][string]$ProfilePath,
+        [psobject]$RuntimeContext
+    )
+
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
 
     if (-not (Test-Path -LiteralPath $ProfilePath -PathType Leaf)) { return $null }
-    $existingBackupPath = Get-Variable -Scope Script -Name ProfileBackupPath -ValueOnly -ErrorAction SilentlyContinue
+    $existingBackupPath = $RuntimeContext.ProfileBackupPath
     if ($existingBackupPath) { return $existingBackupPath }
 
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $backup = "$ProfilePath.bak-$stamp"
-    if (Test-IsDryRunEnabled) {
+    if (Test-IsDryRunEnabled -RuntimeContext $RuntimeContext) {
         Write-DryRun "Backup-ProfileFile: $ProfilePath -> $backup"
     }
     else {
         Copy-Item -Path $ProfilePath -Destination $backup -Force
     }
 
-    $script:ProfileBackupPath = $backup
+    $RuntimeContext.ProfileBackupPath = $backup
     return $backup
 }
 
@@ -120,7 +135,8 @@ function Set-ProfileBlock {
         [Parameter(Mandatory = $true)][string]$ProfilePath,
         [Parameter(Mandatory = $true)][string]$StartMarker,
         [Parameter(Mandatory = $true)][string]$EndMarker,
-        [Parameter(Mandatory = $true)][string]$BlockBody
+        [Parameter(Mandatory = $true)][string]$BlockBody,
+        [psobject]$RuntimeContext
     )
 
     $existing = Get-Content -Path $ProfilePath -Raw -ErrorAction SilentlyContinue
@@ -146,7 +162,7 @@ function Set-ProfileBlock {
     }
     $updated += $newBlock
 
-    Write-AtomicUtf8File -Path $ProfilePath -Content $updated
+    Write-AtomicUtf8File -Path $ProfilePath -Content $updated -RuntimeContext $RuntimeContext
 }
 
 function Remove-ProfileBlock {
@@ -154,7 +170,8 @@ function Remove-ProfileBlock {
     param(
         [Parameter(Mandatory = $true)][string]$ProfilePath,
         [Parameter(Mandatory = $true)][string]$StartMarker,
-        [Parameter(Mandatory = $true)][string]$EndMarker
+        [Parameter(Mandatory = $true)][string]$EndMarker,
+        [psobject]$RuntimeContext
     )
 
     if (-not (Test-Path -LiteralPath $ProfilePath -PathType Leaf)) { return }
@@ -171,6 +188,6 @@ function Remove-ProfileBlock {
     $updated = [regex]::Replace($updated, $endLinePattern, '')
 
     if ($updated -ne $existing) {
-        Write-AtomicUtf8File -Path $ProfilePath -Content $updated
+        Write-AtomicUtf8File -Path $ProfilePath -Content $updated -RuntimeContext $RuntimeContext
     }
 }
