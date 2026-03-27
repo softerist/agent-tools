@@ -32,10 +32,9 @@ function Backup-PathVariable {
     else {
         Join-Path $env:ProgramData "UnixToolsSystemWide"
     }
-    New-Item -ItemType Directory -Path $backupDir -Force -ErrorAction SilentlyContinue | Out-Null
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $file = Join-Path $backupDir "path-backup-$Scope-$stamp.txt"
-    Set-Content -Path $file -Value $current -Encoding UTF8
+    Write-AtomicUtf8File -Path $file -Content $current
     Write-Verbose "PATH backup saved: $file"
     Write-Status -Type detail -Label "PATH backup saved" -Detail (Split-Path $file -Leaf)
 }
@@ -55,9 +54,9 @@ function Assert-Admin {
             return $true
         }
         Write-Footer -Type fail -Message "Administrator rights are required for Machine scope."
-        Write-Host "  Re-run PowerShell as Administrator, or use -UserScope." -ForegroundColor DarkGray
-        Write-Host "  Example: .\Enable-UnixTools.ps1 -InstallFull -UserScope" -ForegroundColor DarkGray
-        Write-Host ""
+        Write-Dim "Re-run PowerShell as Administrator, or use -UserScope."
+        Write-Dim "Example: .\Enable-UnixTools.ps1 -InstallFull -UserScope"
+        Write-BlankLine
         return $false
     }
     return $true
@@ -129,6 +128,21 @@ function Assert-PathLength([string]$PathValue, [string]$Scope = "Machine") {
     }
 }
 
+function Set-ScopedPathValue {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$PathValue,
+        [Parameter(Mandatory = $true)][string]$Scope
+    )
+
+    Assert-PathLength -PathValue $PathValue -Scope $Scope
+    if ($script:DryRun) {
+        Write-DryRun "[Environment]::SetEnvironmentVariable('Path', '...len=$($PathValue.Length)...', '$Scope')"
+        return
+    }
+
+    [Environment]::SetEnvironmentVariable("Path", $PathValue, $Scope)
+}
+
 function Add-MachinePathPrepend([string]$pathToPrepend) {
     $scope = $script:PathScope
     $norm = $pathToPrepend.Trim().TrimEnd('\')
@@ -146,13 +160,7 @@ function Add-MachinePathPrepend([string]$pathToPrepend) {
     }
 
     $newPath = (@($norm) + $parts) -join ';'
-    Assert-PathLength -PathValue $newPath -Scope $scope
-    if ($script:DryRun) {
-        Write-Host "[DRYRUN] [Environment]::SetEnvironmentVariable('Path', '...len=$($newPath.Length)...', '$scope')" -ForegroundColor DarkGray
-    }
-    else {
-        [Environment]::SetEnvironmentVariable("Path", $newPath, $scope)
-    }
+    Set-ScopedPathValue -PathValue $newPath -Scope $scope
 }
 
 function Add-MachinePathEntries([string[]]$pathsToAdd) {
@@ -179,13 +187,7 @@ function Add-MachinePathEntries([string[]]$pathsToAdd) {
 
     if ($changed) {
         $newPath = $parts -join ';'
-        Assert-PathLength -PathValue $newPath -Scope $scope
-        if ($script:DryRun) {
-            Write-Host "[DRYRUN] [Environment]::SetEnvironmentVariable('Path', '...len=$($newPath.Length)...', '$scope')" -ForegroundColor DarkGray
-        }
-        else {
-            [Environment]::SetEnvironmentVariable("Path", $newPath, $scope)
-        }
+        Set-ScopedPathValue -PathValue $newPath -Scope $scope
     }
 
     return $changed
@@ -212,13 +214,7 @@ function Remove-MachinePathEntries([string[]]$pathsToRemove) {
 
     if (($newParts -join ';') -eq ($parts -join ';')) { return $false }
     $newPath = $newParts -join ';'
-    Assert-PathLength -PathValue $newPath -Scope $scope
-    if ($script:DryRun) {
-        Write-Host "[DRYRUN] [Environment]::SetEnvironmentVariable('Path', '...len=$($newPath.Length)...', '$scope')" -ForegroundColor DarkGray
-    }
-    else {
-        [Environment]::SetEnvironmentVariable("Path", $newPath, $scope)
-    }
+    Set-ScopedPathValue -PathValue $newPath -Scope $scope
     return $true
 }
 
@@ -238,24 +234,11 @@ function Update-MachinePathEntries {
     }
 
     $newPath = $newParts -join ';'
-    Assert-PathLength -PathValue $newPath -Scope $scope
-    if ($script:DryRun) {
-        Write-Host "[DRYRUN] [Environment]::SetEnvironmentVariable('Path', '...len=$($newPath.Length)...', '$scope')" -ForegroundColor DarkGray
-    }
-    else {
-        [Environment]::SetEnvironmentVariable("Path", $newPath, $scope)
-    }
+    Set-ScopedPathValue -PathValue $newPath -Scope $scope
 }
 
 function New-DirectoryIfMissing([string]$dir) {
-    if ($script:DryRun) {
-        if (-not (Test-Path $dir)) {
-            Write-Host "[DRYRUN] New-Item -ItemType Directory -Path '$dir'" -ForegroundColor DarkGray
-        }
-    }
-    else {
-        New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
-    }
+    Ensure-DirectoryExists -Path $dir
 }
 
 function Write-ShimCmd([string]$shimDir, [string]$name, [string]$targetExePath) {
@@ -270,10 +253,10 @@ function Write-ShimCmd([string]$shimDir, [string]$name, [string]$targetExePath) 
         """%_unix_tool%"" %*"
     ) -join "`r`n"
     if ($script:DryRun) {
-        Write-Host "[DRYRUN] Set-Content '$shimPath' (Create shim for $name -> $targetExePath)" -ForegroundColor DarkGray
+        Write-DryRun "Write-AtomicAsciiFile '$shimPath' (Create shim for $name -> $targetExePath)"
         return $true
     }
-    Set-Content -Path $shimPath -Value $content -Encoding ASCII -Force
+    Write-AtomicAsciiFile -Path $shimPath -Content $content
     return $true
 }
 

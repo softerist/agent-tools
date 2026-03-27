@@ -16,11 +16,11 @@ catch {
 
 foreach ($path in @(
         (Join-Path $privateRoot 'Output.ps1'),
+        (Join-Path $privateRoot 'FileIO.ps1'),
         (Join-Path $privateRoot 'PathManagement.ps1'),
         (Join-Path $privateRoot 'CommandResolution.ps1'),
         (Join-Path $privateRoot 'OptionalTools.ps1'),
         (Join-Path $privateRoot 'TerminalSetup.ps1'),
-        (Join-Path $privateRoot 'FileIO.ps1'),
         (Join-Path $privateRoot 'ProfileMigration.ps1'),
         (Join-Path $privateRoot 'ProfileSupportInstall.ps1'),
         (Join-Path $publicRoot 'Invoke-EnableUnixTools.ps1')

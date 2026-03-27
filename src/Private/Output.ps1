@@ -151,3 +151,12 @@ function Write-DryRun {
     Write-Host "  [DRYRUN] $Text" -ForegroundColor DarkGray
 }
 
+function Write-BlankLine {
+    Write-Host ""
+}
+
+function Write-AccentLine {
+    param([Parameter(Mandatory)][string]$Text)
+    Write-Host $Text -ForegroundColor DarkCyan
+}
+

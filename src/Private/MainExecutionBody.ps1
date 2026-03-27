@@ -550,8 +550,8 @@ try {
     if ($InstallProfileShims) { $tryCommands += @("ls -la", "'stressed' | rev") }
     if ($InstallOptionalTools) { $tryCommands += @("rg --version", "fd --version") }
     $tryLine = "  Try:  " + ($tryCommands -join " $([char]0x00B7) ")
-    Write-Host $tryLine -ForegroundColor DarkCyan
-    Write-Host ""
+    Write-AccentLine -Text $tryLine
+    Write-BlankLine
 
 }
 finally {

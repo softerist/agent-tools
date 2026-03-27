@@ -61,6 +61,28 @@ function Import-ScriptFunctions {
     }
 }
 
+function Import-SourceFunctions {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [Parameter(Mandatory = $true)][string[]]$Names
+    )
+
+    $ast = Get-ScriptAst -ScriptPath $SourcePath
+    foreach ($name in $Names) {
+        $functionAst = $ast.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
+            }, $false) | Select-Object -First 1
+
+        if (-not $functionAst) {
+            throw "Function '$name' was not found in $SourcePath"
+        }
+
+        $definition = $functionAst.Extent.Text -replace ("^function\s+{0}\b" -f [regex]::Escape($name)), ("function global:{0}" -f $name)
+        Invoke-Expression $definition
+    }
+}
+
 function Get-ScriptParamNames {
     param([Parameter(Mandatory = $true)][string]$ScriptPath)
 

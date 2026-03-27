@@ -9,9 +9,7 @@ function Start-ScriptTranscript([string]$Path) {
     }
 
     $dir = Split-Path -Parent $resolved
-    if ($dir -and -not (Test-Path -LiteralPath $dir -PathType Container)) {
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
-    }
+    Ensure-DirectoryExists -Path $dir
 
     Start-Transcript -Path $resolved -Append -Force | Out-Null
     return $true
@@ -26,36 +24,62 @@ function Stop-ScriptTranscript {
     }
 }
 
-function Write-AtomicUtf8File {
+function Ensure-DirectoryExists {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+    if (Test-Path -LiteralPath $Path -PathType Container) { return }
+
+    if ($script:DryRun) {
+        Write-DryRun "New-Item -ItemType Directory -Path '$Path'"
+        return
+    }
+
+    New-Item -ItemType Directory -Path $Path -Force | Out-Null
+}
+
+function Write-AtomicTextFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content,
+        [ValidateSet('UTF8', 'ASCII')][string]$Encoding = 'UTF8'
     )
 
     $parent = Split-Path -Parent $Path
-    if ($parent -and -not (Test-Path -LiteralPath $parent -PathType Container)) {
-        if ($script:DryRun) {
-            Write-Host "[DRYRUN] New-Item -ItemType Directory -Path '$parent'" -ForegroundColor DarkGray
-        }
-        else {
-            New-Item -ItemType Directory -Path $parent -Force | Out-Null
-        }
-    }
+    Ensure-DirectoryExists -Path $parent
 
     if ($script:DryRun) {
-        Write-Host "[DRYRUN] Write-AtomicUtf8File '$Path'" -ForegroundColor DarkGray
+        Write-DryRun "Write-AtomicTextFile '$Path' -Encoding $Encoding"
         return
     }
 
     $tmp = "$Path.tmp"
     try {
-        Set-Content -Path $tmp -Value $Content -Encoding UTF8
+        Set-Content -Path $tmp -Value $Content -Encoding $Encoding
         Move-Item -Path $tmp -Destination $Path -Force
     }
     catch {
         Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
         throw
     }
+}
+
+function Write-AtomicUtf8File {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content
+    )
+
+    Write-AtomicTextFile -Path $Path -Content $Content -Encoding UTF8
+}
+
+function Write-AtomicAsciiFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content
+    )
+
+    Write-AtomicTextFile -Path $Path -Content $Content -Encoding ASCII
 }
 
 function Backup-ProfileFile {
@@ -67,7 +91,7 @@ function Backup-ProfileFile {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $backup = "$ProfilePath.bak-$stamp"
     if ($script:DryRun) {
-        Write-Host "[DRYRUN] Backup-ProfileFile: $ProfilePath -> $backup" -ForegroundColor DarkGray
+        Write-DryRun "Backup-ProfileFile: $ProfilePath -> $backup"
     }
     else {
         Copy-Item -Path $ProfilePath -Destination $backup -Force

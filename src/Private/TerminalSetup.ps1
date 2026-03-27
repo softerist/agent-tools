@@ -2,7 +2,7 @@
     param([Parameter(Mandatory = $true)][string]$ThemesDir)
 
     if ($script:DryRun) {
-        Write-Host "[DRYRUN] Download and extract Oh My Posh themes to '$ThemesDir'" -ForegroundColor DarkGray
+        Write-DryRun "Download and extract Oh My Posh themes to '$ThemesDir'"
         return
     }
 
@@ -67,12 +67,13 @@ function Update-ManagedOhMyPoshThemes {
         }
     }
 
-    $themeJson | ConvertTo-Json -Depth 100 | Set-Content -Path $lightgreenThemePath -Encoding UTF8
+    $themeContent = $themeJson | ConvertTo-Json -Depth 100
+    Write-AtomicUtf8File -Path $lightgreenThemePath -Content $themeContent
 }
 
 function Install-NerdFont {
     if ($script:DryRun) {
-        Write-Host "[DRYRUN] Download and install CaskaydiaCove Nerd Font" -ForegroundColor DarkGray
+        Write-DryRun "Download and install CaskaydiaCove Nerd Font"
         return
     }
 
@@ -95,7 +96,7 @@ function Install-NerdFont {
     try {
         Write-Status -Type detail -Label "Downloading font" -Detail "ryanoasis/nerd-fonts" -Indent
         Invoke-WebRequest -Uri "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/CascadiaCode.zip" -OutFile $zip -ErrorAction Stop
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        Ensure-DirectoryExists -Path $dir
         Expand-Archive -Path $zip -DestinationPath $dir -Force -ErrorAction Stop
         
         Write-Status -Type detail -Label "Installing font" -Detail "copying to User and System Fonts (silent)" -Indent
@@ -109,9 +110,7 @@ function Install-NerdFont {
         }
 
         foreach ($loc in $installLocations) {
-            if (-not (Test-Path $loc.Dir)) {
-                New-Item -ItemType Directory -Path $loc.Dir -Force | Out-Null
-            }
+            Ensure-DirectoryExists -Path $loc.Dir
         }
         
         Get-ChildItem -Path $dir -Include "*.ttf", "*.otf" -Recurse | ForEach-Object {
@@ -238,10 +237,38 @@ function Update-EditorAndTerminalFontSettings {
     }
 
     if ($updated) {
-        Set-Content -Path $SettingsPath -Value $content -Encoding UTF8
+        Write-AtomicUtf8File -Path $SettingsPath -Content $content
     }
 
     return $updated
+}
+
+function Update-WindowsTerminalFontSettings {
+    param(
+        [Parameter(Mandatory = $true)][string]$SettingsPath
+    )
+
+    if (-not (Test-Path -LiteralPath $SettingsPath -PathType Leaf)) {
+        return $false
+    }
+
+    $content = Get-Content -Path $SettingsPath -Raw
+    if ($content -match '"face"\s*:\s*"CaskaydiaCove[^"]*"' -or $content -match '"fontFace"\s*:\s*"CaskaydiaCove[^"]*"') {
+        return $false
+    }
+
+    if ($content -match '"defaults"\s*:\s*\{\s*\}') {
+        $content = $content -replace '"defaults"\s*:\s*\{\s*\}', '"defaults": { "font": { "face": "CaskaydiaCove NF" } }'
+    }
+    elseif ($content -match '"defaults"\s*:\s*\{') {
+        $content = $content -replace '("defaults"\s*:\s*\{)(\s*"[^"]+")', ('$1' + "`n            `"font`": { `"face`": `"CaskaydiaCove NF`" }," + '$2')
+    }
+    else {
+        return $false
+    }
+
+    Write-AtomicUtf8File -Path $SettingsPath -Content $content
+    return $true
 }
 
 function Set-TerminalFonts {
@@ -250,19 +277,7 @@ function Set-TerminalFonts {
     $wtPaths = Get-ChildItem -Path "$env:LOCALAPPDATA\Packages" -Filter "Microsoft.WindowsTerminal*" -Directory -ErrorAction SilentlyContinue 
     foreach ($wtDir in $wtPaths) {
         $wtSettings = Join-Path $wtDir.FullName "LocalState\settings.json"
-        if (Test-Path $wtSettings) {
-            $content = Get-Content $wtSettings -Raw
-            if ($content -notmatch '"face"\s*:\s*"CaskaydiaCove[^"]*"' -and $content -notmatch '"fontFace"\s*:\s*"CaskaydiaCove[^"]*"') {
-                if ($content -match '"defaults"\s*:\s*\{\s*\}') {
-                    $content = $content -replace '"defaults"\s*:\s*\{\s*\}', '"defaults": { "font": { "face": "CaskaydiaCove NF" } }'
-                    Set-Content -Path $wtSettings -Value $content -Encoding UTF8
-                }
-                elseif ($content -match '"defaults"\s*:\s*\{') {
-                    $content = $content -replace '("defaults"\s*:\s*\{)(\s*"[^"]+")', ('$1' + "`n            `"font`": { `"face`": `"CaskaydiaCove NF`" }," + '$2')
-                    Set-Content -Path $wtSettings -Value $content -Encoding UTF8
-                }
-            }
-        }
+        Update-WindowsTerminalFontSettings -SettingsPath $wtSettings | Out-Null
     }
 
     $vscodeSettingsDirs = @(
