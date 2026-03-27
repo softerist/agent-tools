@@ -50,7 +50,21 @@ foreach ($path in @(
         throw "Bootstrap source not found: $path"
     }
 
-    . $path
+    $tokens = $null
+    $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+    if ($errors -and $errors.Count -gt 0) {
+        throw ($errors | ForEach-Object Message | Out-String)
+    }
+
+    $functions = @($ast.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
+            }, $false))
+
+    foreach ($functionAst in $functions) {
+        . ([scriptblock]::Create($functionAst.Extent.Text))
+    }
 }
 
 $script:EnableUnixToolsBootstrapLoaded = $true
