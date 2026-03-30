@@ -14,19 +14,19 @@ function Get-EnableUnixToolsScriptValue {
 
 function Get-DefaultEnableUnixToolsUi {
     return [pscustomobject]@{
-        TL     = '+'
-        TR     = '+'
-        BL     = '+'
-        BR     = '+'
-        HLine  = '-'
-        VLine  = '|'
-        Ok     = '+'
-        Fail   = 'x'
-        Info   = 'i'
-        Detail = '>'
-        Warn   = '!'
-        Skip   = '-'
-        Arrow  = '->'
+        TL     = [string][char]0x256D
+        TR     = [string][char]0x256E
+        BL     = [string][char]0x2570
+        BR     = [string][char]0x256F
+        HLine  = [string][char]0x2500
+        VLine  = [string][char]0x2502
+        Ok     = [string][char]0x2713
+        Fail   = [string][char]0x2715
+        Info   = [string][char]0x2139
+        Detail = [string][char]0x203A
+        Warn   = [string][char]0x26A0
+        Skip   = [string][char]0x00B7
+        Arrow  = [string][char]0x2192
     }
 }
 
