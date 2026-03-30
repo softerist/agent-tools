@@ -1,8 +1,8 @@
-if (-not $script:__UnixExeCache) {
+if (-not (Get-Variable -Scope Script -Name __UnixExeCache -ErrorAction SilentlyContinue)) {
     $script:__UnixExeCache = @{}
 }
 
-if (-not $script:__UnixExeMissing) {
+if (-not (Get-Variable -Scope Script -Name __UnixExeMissing -ErrorAction SilentlyContinue)) {
     $script:__UnixExeMissing = New-Object object
 }
 
@@ -10,6 +10,64 @@ function Test-GitPreferredCoreCommand {
     param([Parameter(Mandatory = $true)][string]$Name)
 
     return $Name -in @('ls', 'cp', 'mv', 'rm', 'cat', 'sort')
+}
+
+function Get-UnixToolsProfileConfig {
+    return Get-Variable -Scope Global -Name UnixToolsProfileConfig -ValueOnly -ErrorAction SilentlyContinue
+}
+
+function Get-UnixToolsFileStamp {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return ''
+    }
+
+    $item = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
+    if (-not $item) {
+        return ''
+    }
+
+    return '{0}:{1}' -f $item.Length, $item.LastWriteTimeUtc.Ticks
+}
+
+function Get-UnixToolsCacheHeader {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $null
+    }
+
+    $metadata = @{}
+    foreach ($line in @(Get-Content -LiteralPath $Path -TotalCount 8 -ErrorAction SilentlyContinue)) {
+        if ($line -match '^#\s*(?<key>[A-Za-z0-9]+):\s*(?<value>.*)$') {
+            $metadata[$matches['key']] = $matches['value']
+        }
+    }
+
+    return $metadata
+}
+
+function Write-UnixToolsCacheFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content
+    )
+
+    try {
+        $directory = Split-Path -Parent $Path
+        if ($directory) {
+            [System.IO.Directory]::CreateDirectory($directory) | Out-Null
+        }
+
+        $encoding = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText($Path, $Content, $encoding)
+        return $true
+    }
+    catch {
+        Write-Verbose "Failed to write cache file '$Path': $($_.Exception.Message)"
+        return $false
+    }
 }
 
 function Get-ApplicationSourcePriority {

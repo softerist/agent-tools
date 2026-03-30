@@ -22,6 +22,39 @@ function Start-ScriptTranscript {
     return $true
 }
 
+function Get-ManagedUserProfilePathList {
+    $profilePaths = New-Object System.Collections.Generic.List[string]
+
+    $currentHostProfilePath = $null
+    try {
+        $currentHostProfilePath = $PROFILE.CurrentUserCurrentHost
+    }
+    catch {
+        $currentHostProfilePath = $null
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($currentHostProfilePath)) {
+        $profilePaths.Add($currentHostProfilePath) | Out-Null
+    }
+
+    $userHome = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+        $env:USERPROFILE
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($HOME)) {
+        $HOME
+    }
+    else {
+        $null
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($userHome)) {
+        $profilePaths.Add((Join-Path $userHome 'Documents\PowerShell\Microsoft.PowerShell_profile.ps1')) | Out-Null
+        $profilePaths.Add((Join-Path $userHome 'Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1')) | Out-Null
+    }
+
+    return @($profilePaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+}
+
 function Test-IsDryRunEnabled {
     param([psobject]$RuntimeContext)
 
@@ -113,7 +146,13 @@ function Backup-ProfileFile {
     $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
 
     if (-not (Test-Path -LiteralPath $ProfilePath -PathType Leaf)) { return $null }
-    $existingBackupPath = $RuntimeContext.ProfileBackupPath
+    $backupMap = $RuntimeContext.ProfileBackupPathMap
+    if ($null -eq $backupMap) {
+        $backupMap = @{}
+        $RuntimeContext.ProfileBackupPathMap = $backupMap
+    }
+
+    $existingBackupPath = if ($backupMap.ContainsKey($ProfilePath)) { $backupMap[$ProfilePath] } else { $null }
     if ($existingBackupPath) { return $existingBackupPath }
 
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -125,6 +164,7 @@ function Backup-ProfileFile {
         Copy-Item -Path $ProfilePath -Destination $backup -Force
     }
 
+    $backupMap[$ProfilePath] = $backup
     $RuntimeContext.ProfileBackupPath = $backup
     return $backup
 }

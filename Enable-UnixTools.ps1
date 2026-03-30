@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Adds Unix-compatible tools to Windows PATH with optional shims and profile support.
+    Adds Unix-compatible tools to Windows PATH using real app executables.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium', DefaultParameterSetName = 'Default')]
 param(
@@ -19,7 +19,7 @@ param(
     [string]$Theme = 'lightgreen',
     [string]$ThemesDir,
     [ValidateSet('Fast', 'Legacy')][string]$ProfileStartupMode = 'Fast',
-    [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Eager',
+    [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Lazy',
     [string]$LogPath,
     [Alias('h')]
     [switch]$Help,

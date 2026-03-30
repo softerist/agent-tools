@@ -1,10 +1,73 @@
 if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
+    $profileConfig = Get-UnixToolsProfileConfig
     $script:SmartShellExeCache = @{}
     $script:UnixInteractiveFeaturesEnabled = $false
+    $script:UnixToolsZoxideInitialized = $false
     $winGetLinks = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'
     $winGetPackages = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
     if ((Test-Path -LiteralPath $winGetLinks) -and -not (($env:PATH -split ';') -contains $winGetLinks)) {
         $env:PATH = "$winGetLinks;$env:PATH"
+    }
+
+    foreach ($name in @('ls', 'cp', 'mv', 'rm', 'cat', 'sort')) {
+        Reset-UnixShimName -Name $name
+
+        $commandName = $name
+        $wrapper = {
+            $app = $null
+            $invocationArgs = @($args)
+
+            if ($commandName -eq 'ls') {
+                $ezaCommand = Get-PreferredApplicationCommand -Name 'eza'
+                if ($ezaCommand) {
+                    $app = $ezaCommand
+                    $translatedArgs = New-Object System.Collections.Generic.List[object]
+                    $parseOptions = $true
+                    foreach ($argument in $invocationArgs) {
+                        if ($parseOptions -and $argument -eq '--') {
+                            $parseOptions = $false
+                            $translatedArgs.Add($argument) | Out-Null
+                            continue
+                        }
+
+                        if ($parseOptions -and $argument -is [string] -and $argument -match '^-[A-Za-z]+$') {
+                            foreach ($flag in $argument.Substring(1).ToCharArray()) {
+                                if ($flag -eq 'f') {
+                                    $translatedArgs.Add('-a') | Out-Null
+                                    $translatedArgs.Add('-s') | Out-Null
+                                    $translatedArgs.Add('none') | Out-Null
+                                }
+                                else {
+                                    $translatedArgs.Add('-' + $flag) | Out-Null
+                                }
+                            }
+                            continue
+                        }
+
+                        $translatedArgs.Add($argument) | Out-Null
+                    }
+
+                    $invocationArgs = $translatedArgs.ToArray()
+                }
+            }
+
+            if (-not $app) {
+                $app = Get-PreferredApplicationCommand -Name $commandName
+            }
+
+            if (-not $app) {
+                throw "unix-tools: '$commandName' executable not found on PATH. Install the real tool and open a new terminal."
+            }
+
+            if ($MyInvocation.ExpectingInput) {
+                $input | & $app.Source @invocationArgs
+            }
+            else {
+                & $app.Source @invocationArgs
+            }
+        }.GetNewClosure()
+
+        Set-Item -Path ("Function:\Global:" + $name) -Value $wrapper
     }
 
     function Resolve-SmartShellExecutable {
@@ -51,6 +114,104 @@ if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
         }
     }
 
+    function Invoke-UnixToolsCachedZoxideInit {
+        param([Parameter(Mandatory = $true)][string]$ExecutablePath)
+
+        if (-not $profileConfig -or [string]::IsNullOrWhiteSpace($profileConfig.SupportRoot)) {
+            & ([scriptblock]::Create((& $ExecutablePath init powershell --cmd j | Out-String)))
+            return
+        }
+
+        $cachePath = Join-Path $profileConfig.SupportRoot 'UnixTools.Zoxide.Init.ps1'
+        $exeStamp = Get-UnixToolsFileStamp -Path $ExecutablePath
+        $metadata = Get-UnixToolsCacheHeader -Path $cachePath
+        $canUseCache = $metadata -and
+            $metadata['Kind'] -eq 'Zoxide' -and
+            $metadata['ExePath'] -eq $ExecutablePath -and
+            $metadata['ExeStamp'] -eq $exeStamp
+
+        if ($canUseCache) {
+            . $cachePath
+            return
+        }
+
+        $generated = & $ExecutablePath init powershell --cmd j | Out-String
+        $escapedExecutablePath = $ExecutablePath.Replace("'", "''")
+        $cacheContent = @(
+            '# Kind: Zoxide'
+            "# ExePath: $escapedExecutablePath"
+            "# ExeStamp: $exeStamp"
+            $generated
+            ''
+        ) -join "`n"
+
+        if (Write-UnixToolsCacheFile -Path $cachePath -Content $cacheContent) {
+            . $cachePath
+            return
+        }
+
+        & ([scriptblock]::Create($generated))
+    }
+
+    function Initialize-UnixToolsPsReadLineState {
+        [CmdletBinding(SupportsShouldProcess = $true)]
+        param()
+
+        if (-not $PSCmdlet.ShouldProcess('PSReadLine session', 'Initialize unix-tools defaults')) {
+            return
+        }
+
+        if (-not (Get-Module -ListAvailable PSReadLine)) {
+            return
+        }
+
+        if (-not (Get-Module PSReadLine -ErrorAction SilentlyContinue)) {
+            Import-Module PSReadLine -ErrorAction SilentlyContinue
+        }
+
+        if (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
+            try {
+                $predictionSource = if (Get-Module CompletionPredictor -ErrorAction SilentlyContinue) { 'HistoryAndPlugin' } else { 'History' }
+                Set-PSReadLineOption -PredictionSource $predictionSource
+                Set-PSReadLineOption -PredictionViewStyle InlineView
+            }
+            catch {
+                Write-Verbose "PSReadLine interactive features unavailable: $($_.Exception.Message)"
+            }
+        }
+    }
+
+    function Initialize-UnixToolsZoxideSupport {
+        if ($script:UnixToolsZoxideInitialized) {
+            return $true
+        }
+
+        $zoxideExe = Resolve-SmartShellExecutable -Candidates @('zoxide.exe', 'zoxide.cmd')
+        if (-not $zoxideExe) {
+            return $false
+        }
+
+        Remove-Item -Path Function:\Global:j -ErrorAction SilentlyContinue
+        Remove-Item -Path Function:\Global:ji -ErrorAction SilentlyContinue
+
+        Invoke-UnixToolsCachedZoxideInit -ExecutablePath $zoxideExe
+        $script:UnixToolsZoxideInitialized = $true
+        return $true
+    }
+
+    function Invoke-UnixToolsDeferredZoxideCommand {
+        param(
+            [Parameter(Mandatory = $true)][ValidateSet('j', 'ji')][string]$Name,
+            [Parameter(ValueFromRemainingArguments = $true)][object[]]$RemainingArgs
+        )
+
+        if (-not (Initialize-UnixToolsZoxideSupport)) {
+            throw 'zoxide is not available on PATH. Re-run setup with -InstallOptionalTools or restart PowerShell.'
+        }
+
+        & $Name @RemainingArgs
+    }
+
     function Enable-UnixInteractiveFeatureSet {
         if ($script:UnixInteractiveFeaturesEnabled) {
             return
@@ -74,18 +235,7 @@ if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
             }
         }
 
-        if (Get-Module PSReadLine -ErrorAction SilentlyContinue) {
-            if (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
-                try {
-                    $predictionSource = if (Get-Module CompletionPredictor -ErrorAction SilentlyContinue) { 'HistoryAndPlugin' } else { 'History' }
-                    Set-PSReadLineOption -PredictionSource $predictionSource
-                    Set-PSReadLineOption -PredictionViewStyle InlineView
-                }
-                catch {
-                    Write-Verbose "PSReadLine interactive features unavailable: $($_.Exception.Message)"
-                }
-            }
-        }
+        Initialize-UnixToolsPsReadLineState
 
         if (Get-Command Set-PsFzfOption -ErrorAction SilentlyContinue) {
             Set-PsFzfOption -EnableAliasFuzzyZLocation:$true -AltCCommand { Invoke-FuzzyZLocation }
@@ -94,31 +244,23 @@ if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
         $script:UnixInteractiveFeaturesEnabled = $true
     }
 
-    if (Get-Module -ListAvailable PSReadLine) {
-        if (-not (Get-Module PSReadLine -ErrorAction SilentlyContinue)) {
-            Import-Module PSReadLine -ErrorAction SilentlyContinue
-        }
-        if (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
-            try {
-                Set-PSReadLineOption -PredictionSource History
-                Set-PSReadLineOption -PredictionViewStyle InlineView
-            }
-            catch {
-                Write-Verbose "PSReadLine prediction setup unavailable: $($_.Exception.Message)"
-            }
-        }
-    }
-
-    if ($script:UnixToolsProfileConfig.StartupMode -eq 'Legacy') {
+    if ($profileConfig -and $profileConfig.StartupMode -eq 'Legacy') {
         Enable-UnixInteractiveFeatureSet
+        Initialize-UnixToolsZoxideSupport | Out-Null
+    }
+    else {
+        function global:j {
+            param([Parameter(ValueFromRemainingArguments = $true)][object[]]$RemainingArgs)
+            Invoke-UnixToolsDeferredZoxideCommand -Name 'j' @RemainingArgs
+        }
+
+        function global:ji {
+            param([Parameter(ValueFromRemainingArguments = $true)][object[]]$RemainingArgs)
+            Invoke-UnixToolsDeferredZoxideCommand -Name 'ji' @RemainingArgs
+        }
     }
 
     Set-Alias -Name Enable-UnixInteractiveFeatures -Value Enable-UnixInteractiveFeatureSet -Scope Global -ErrorAction SilentlyContinue
-
-    $zoxideExe = Resolve-SmartShellExecutable -Candidates @('zoxide.exe', 'zoxide.cmd')
-    if ($zoxideExe) {
-        & ([scriptblock]::Create((& $zoxideExe init powershell --cmd j | Out-String)))
-    }
 
     function global:y {
         $yaziExe = Resolve-SmartShellExecutable -Candidates @('yazi.exe', 'ya.exe', 'yazi.cmd', 'ya.cmd') -AllowPackageScan

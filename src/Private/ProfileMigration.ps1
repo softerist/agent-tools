@@ -239,25 +239,39 @@ function Remove-InstalledProfileSupport {
     param([psobject]$RuntimeContext)
 
     $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
-    $profilePath = $PROFILE.CurrentUserCurrentHost
-    $backup = Backup-ProfileFile -ProfilePath $profilePath -RuntimeContext $RuntimeContext
-    if ($backup) { Write-Verbose "Profile backup: $backup" }
+    $profilePaths = @(Get-ManagedUserProfilePathList)
+    $removedLegacyPaths = New-Object System.Collections.Generic.List[string]
+    $ambiguousLegacyPaths = New-Object System.Collections.Generic.List[string]
+    foreach ($profilePath in $profilePaths) {
+        $backup = Backup-ProfileFile -ProfilePath $profilePath -RuntimeContext $RuntimeContext
+        if ($backup) { Write-Verbose "Profile backup: $backup" }
 
-    Remove-ManagedProfileBlockSet -ProfilePath $profilePath -RuntimeContext $RuntimeContext
-    $legacyResult = Remove-LegacyInlineProfileShimBlock -ProfilePath $profilePath -RuntimeContext $RuntimeContext
+        Remove-ManagedProfileBlockSet -ProfilePath $profilePath -RuntimeContext $RuntimeContext
+        $legacyResult = Remove-LegacyInlineProfileShimBlock -ProfilePath $profilePath -RuntimeContext $RuntimeContext
+
+        switch ($legacyResult.Status) {
+            'Removed' {
+                $removedLegacyPaths.Add($profilePath) | Out-Null
+            }
+            'Ambiguous' {
+                $ambiguousLegacyPaths.Add($profilePath) | Out-Null
+            }
+        }
+    }
 
     if (Get-Command Remove-ManagedProfileSupportPayload -CommandType Function -ErrorAction SilentlyContinue) {
         Remove-ManagedProfileSupportPayload -RuntimeContext $RuntimeContext | Out-Null
     }
 
-    switch ($legacyResult.Status) {
-        'Removed' {
-            Write-Status -Type ok -Label 'Legacy inline shims' -Detail $legacyResult.Detail -RuntimeContext $RuntimeContext
-        }
-        'Ambiguous' {
-            Write-Status -Type warn -Label 'Legacy inline shims' -Detail $legacyResult.Detail -RuntimeContext $RuntimeContext
-        }
+    if ($removedLegacyPaths.Count -gt 0) {
+        Write-Status -Type ok -Label 'Legacy inline shims' -Detail ("removed from " + ($removedLegacyPaths -join ', ')) -RuntimeContext $RuntimeContext
+    }
+    if ($ambiguousLegacyPaths.Count -gt 0) {
+        Write-Status -Type warn -Label 'Legacy inline shims' -Detail ("ambiguous in " + ($ambiguousLegacyPaths -join ', ')) -RuntimeContext $RuntimeContext
     }
 
-    return $legacyResult
+    return [pscustomobject]@{
+        Status = if ($ambiguousLegacyPaths.Count -gt 0) { 'Ambiguous' } elseif ($removedLegacyPaths.Count -gt 0) { 'Removed' } else { 'NotFound' }
+        Detail = if ($ambiguousLegacyPaths.Count -gt 0) { $ambiguousLegacyPaths -join ', ' } elseif ($removedLegacyPaths.Count -gt 0) { $removedLegacyPaths -join ', ' } else { '' }
+    }
 }

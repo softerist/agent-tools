@@ -29,8 +29,8 @@ Describe 'Public surface and docs' {
         $moduleText = Get-Content -Path (Join-Path $repoRoot 'Enable-UnixTools.psm1') -Raw
         $scriptText = Get-Content -Path $scriptPath -Raw
 
-        ($scriptText -match "PromptInitMode = 'Eager'") | Should Be $true
-        ($moduleText -match "PromptInitMode = 'Eager'") | Should Be $true
+        ($scriptText -match "PromptInitMode = 'Lazy'") | Should Be $true
+        ($moduleText -match "PromptInitMode = 'Lazy'") | Should Be $true
     }
 
     It 'does not include PSScriptAnalyzer in optional shell modules' {
@@ -45,7 +45,7 @@ Describe 'Public surface and docs' {
         ($readmeText -match 'RepairWinget') | Should Be $false
         ($readmeText -match 'UninstallOptionalTools') | Should Be $true
         ($readmeText -match 'ProfileStartupMode Fast') | Should Be $true
-        ($readmeText -match 'PromptInitMode Eager') | Should Be $true
+        ($readmeText -match 'PromptInitMode Lazy') | Should Be $true
     }
 
     It 'guards optional-tool uninstall behind the explicit uninstall switch' {

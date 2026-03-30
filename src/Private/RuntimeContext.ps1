@@ -42,7 +42,8 @@ function New-EnableUnixToolsRuntimeContext {
         [string]$PathDisplay,
         [bool]$DryRun = $false,
         [psobject]$Ui,
-        [AllowNull()][string]$ProfileBackupPath = $null
+        [AllowNull()][string]$ProfileBackupPath = $null,
+        [hashtable]$ProfileBackupPathMap = $null
     )
 
     $effectiveUi = if ($Ui) { $Ui } else { Get-DefaultEnableUnixToolsUi }
@@ -59,6 +60,7 @@ function New-EnableUnixToolsRuntimeContext {
         DryRun            = [bool]$DryRun
         Ui                = $effectiveUi
         ProfileBackupPath = $ProfileBackupPath
+        ProfileBackupPathMap = if ($ProfileBackupPathMap) { $ProfileBackupPathMap } else { @{} }
     }
 }
 
@@ -78,6 +80,9 @@ function Resolve-EnableUnixToolsRuntimeContext {
         }
         if (-not $RuntimeContext.PSObject.Properties['ProfileBackupPath']) {
             Add-Member -InputObject $RuntimeContext -MemberType NoteProperty -Name ProfileBackupPath -Value $null -Force
+        }
+        if (-not $RuntimeContext.PSObject.Properties['ProfileBackupPathMap']) {
+            Add-Member -InputObject $RuntimeContext -MemberType NoteProperty -Name ProfileBackupPathMap -Value @{} -Force
         }
         return $RuntimeContext
     }
@@ -110,6 +115,7 @@ function Resolve-EnableUnixToolsRuntimeContext {
     $dryRun = [bool](Get-EnableUnixToolsScriptValue -Name DryRun -Default $false)
     $ui = Get-EnableUnixToolsScriptValue -Name UI -Default (Get-DefaultEnableUnixToolsUi)
     $profileBackupPath = Get-EnableUnixToolsScriptValue -Name ProfileBackupPath
+    $profileBackupPathMap = Get-EnableUnixToolsScriptValue -Name ProfileBackupPathMap -Default @{}
 
     return New-EnableUnixToolsRuntimeContext `
         -RepoRoot $repoRoot `
@@ -121,7 +127,8 @@ function Resolve-EnableUnixToolsRuntimeContext {
         -PathDisplay $pathDisplay `
         -DryRun:$dryRun `
         -Ui $ui `
-        -ProfileBackupPath $profileBackupPath
+        -ProfileBackupPath $profileBackupPath `
+        -ProfileBackupPathMap $profileBackupPathMap
 }
 
 function Test-EnableUnixToolsDryRun {

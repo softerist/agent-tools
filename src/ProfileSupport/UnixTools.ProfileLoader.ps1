@@ -5,7 +5,7 @@ if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
 }
 
 try {
-    $script:UnixToolsProfileConfig = Import-PowerShellDataFile -Path $configPath
+    Set-Variable -Scope Global -Name UnixToolsProfileConfig -Value (Import-PowerShellDataFile -Path $configPath)
 }
 catch {
     Write-Warning "unix-tools: failed to load profile config: $($_.Exception.Message)"
@@ -14,8 +14,6 @@ catch {
 
 foreach ($supportFile in @(
         'UnixTools.ProfileShared.ps1',
-        'UnixTools.MissingShims.ps1',
-        'UnixTools.AliasCompat.ps1',
         'UnixTools.SmartShell.ps1'
     )) {
     $supportPath = Join-Path $supportRoot $supportFile
@@ -24,7 +22,8 @@ foreach ($supportFile in @(
     }
 }
 
-if ($script:UnixToolsProfileConfig.PromptInitMode -ne 'Off') {
+$profileConfig = Get-Variable -Scope Global -Name UnixToolsProfileConfig -ValueOnly -ErrorAction SilentlyContinue
+if ($profileConfig -and $profileConfig.PromptInitMode -ne 'Off') {
     $promptPath = Join-Path $supportRoot 'UnixTools.Prompt.ps1'
     if (Test-Path -LiteralPath $promptPath -PathType Leaf) {
         . $promptPath

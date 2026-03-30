@@ -14,7 +14,9 @@ Import-ScriptFunction -ScriptPath $modulePath -Names @(
     'Get-ManagedProfileSupportFileNameList',
     'Get-ProfileInstallationState',
     'Install-ProfileInlineSupport',
-    'Remove-InstalledProfileSupport'
+    'Remove-InstalledProfileSupport',
+    'Invoke-ProfileSetupFlow',
+    'Invoke-ShimCleanupFlow'
 )
 
 function New-IntegrationUserState {
@@ -25,10 +27,12 @@ function New-IntegrationUserState {
     $localAppData = Join-Path $root 'LocalAppData'
     $userProfile = Join-Path $root 'UserProfile'
     $appData = Join-Path $root 'AppData'
-    $documentsDir = Join-Path $root 'Documents\PowerShell'
-    $profilePath = Join-Path $documentsDir 'Microsoft.PowerShell_profile.ps1'
+    $pwshDocumentsDir = Join-Path $userProfile 'Documents\PowerShell'
+    $windowsPowerShellDocumentsDir = Join-Path $userProfile 'Documents\WindowsPowerShell'
+    $profilePath = Join-Path $pwshDocumentsDir 'Microsoft.PowerShell_profile.ps1'
+    $windowsPowerShellProfilePath = Join-Path $windowsPowerShellDocumentsDir 'Microsoft.PowerShell_profile.ps1'
 
-    foreach ($dir in @($localAppData, $userProfile, $appData, $documentsDir)) {
+    foreach ($dir in @($localAppData, $userProfile, $appData, $pwshDocumentsDir, $windowsPowerShellDocumentsDir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
 
@@ -38,6 +42,7 @@ function New-IntegrationUserState {
         UserProfile = $userProfile
         AppData     = $appData
         ProfilePath = $profilePath
+        WindowsPowerShellProfilePath = $windowsPowerShellProfilePath
         SupportRoot = Join-Path $localAppData 'UnixToolsSystemWide\profile'
     }
 }
@@ -124,6 +129,7 @@ Describe 'Integration flows' {
             Enable-UnixTools -UserScope -InstallProfileShims -PromptInitMode Off -WhatIf
 
             (Test-Path -LiteralPath $state.ProfilePath -PathType Leaf) | Should Be $false
+            (Test-Path -LiteralPath $state.WindowsPowerShellProfilePath -PathType Leaf) | Should Be $false
             (Test-Path -LiteralPath $state.SupportRoot -PathType Container) | Should Be $false
         }
     }
@@ -166,15 +172,22 @@ Describe 'Integration flows' {
             $installedState.HasManagedBlocks | Should Be $true
             $installedState.StartupMode | Should Be 'Fast'
             $installedState.PromptInitMode | Should Be 'Off'
+            $windowsPowerShellProfileState = Get-ProfileInstallationState -ProfilePath $state.WindowsPowerShellProfilePath
+            $windowsPowerShellProfileState.HasManagedBlocks | Should Be $true
 
             foreach ($fileName in Get-ManagedProfileSupportFileNameList) {
                 (Test-Path -LiteralPath (Join-Path $state.SupportRoot $fileName) -PathType Leaf) | Should Be $true
             }
 
+            Set-Content -Path (Join-Path $state.SupportRoot 'UnixTools.MissingShims.ps1') -Value '# legacy' -Encoding UTF8
+            Set-Content -Path (Join-Path $state.SupportRoot 'UnixTools.AliasCompat.ps1') -Value '# legacy' -Encoding UTF8
+
             Remove-InstalledProfileSupport -RuntimeContext $runtimeContext | Out-Null
 
             $removedState = Get-ProfileInstallationState -ProfilePath $state.ProfilePath
             $removedState.HasManagedBlocks | Should Be $false
+            $removedWindowsPowerShellState = Get-ProfileInstallationState -ProfilePath $state.WindowsPowerShellProfilePath
+            $removedWindowsPowerShellState.HasManagedBlocks | Should Be $false
             (Test-Path -LiteralPath $state.SupportRoot -PathType Container) | Should Be $false
         }
     }
@@ -199,11 +212,73 @@ Describe 'Integration flows' {
                 Enable-UnixTools -UserScope -InstallProfileShims -PromptInitMode Off -WhatIf
 
                 (Test-Path -LiteralPath $state.ProfilePath -PathType Leaf) | Should Be $false
+                (Test-Path -LiteralPath $state.WindowsPowerShellProfilePath -PathType Leaf) | Should Be $false
                 (Test-Path -LiteralPath $state.SupportRoot -PathType Container) | Should Be $false
             }
         }
         finally {
             Remove-Item -LiteralPath $package.StagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'the full-install profile setup flow materializes managed profile support for the active user profile' {
+        Invoke-WithTemporaryUserState {
+            param($state)
+
+            $runtimeContext = Initialize-IntegrationState
+            $stateBag = [pscustomobject]@{
+                DidChange = $false
+            }
+            $cmdletStub = [pscustomobject]@{}
+            $cmdletStub | Add-Member -MemberType ScriptMethod -Name ShouldProcess -Value {
+                param($target, $action)
+                $null = $target
+                $null = $action
+                return $true
+            }
+
+            Invoke-ProfileSetupFlow -Cmdlet $cmdletStub -State $stateBag -InstallFull -ThemesDir (Join-Path $state.Root 'Themes') -Theme 'lightgreen' -PromptInitMode Off -RuntimeContext $runtimeContext
+
+            $installedState = Get-ProfileInstallationState -ProfilePath $state.ProfilePath
+            $installedState.HasManagedBlocks | Should Be $true
+            $installedState.StartupMode | Should Be 'Fast'
+            $installedState.PromptInitMode | Should Be 'Off'
+            $windowsPowerShellProfileState = Get-ProfileInstallationState -ProfilePath $state.WindowsPowerShellProfilePath
+            $windowsPowerShellProfileState.HasManagedBlocks | Should Be $true
+            $stateBag.DidChange | Should Be $true
+
+            foreach ($fileName in Get-ManagedProfileSupportFileNameList) {
+                (Test-Path -LiteralPath (Join-Path $state.SupportRoot $fileName) -PathType Leaf) | Should Be $true
+            }
+        }
+    }
+
+    It 'shim cleanup does not remove the freshly installed managed profile loader during install flows' {
+        Invoke-WithTemporaryUserState {
+            param($state)
+
+            $runtimeContext = Initialize-IntegrationState
+            $stateBag = [pscustomobject]@{
+                DidChange = $false
+            }
+            $cmdletStub = [pscustomobject]@{}
+            $cmdletStub | Add-Member -MemberType ScriptMethod -Name ShouldProcess -Value {
+                param($target, $action)
+                $null = $target
+                $null = $action
+                return $true
+            }
+
+            Invoke-ProfileSetupFlow -Cmdlet $cmdletStub -State $stateBag -InstallFull -ThemesDir (Join-Path $state.Root 'Themes') -Theme 'lightgreen' -PromptInitMode Off -RuntimeContext $runtimeContext
+            Invoke-ShimCleanupFlow -Cmdlet $cmdletStub -State $stateBag -Context ([pscustomobject]@{
+                    UserShimDir = Join-Path $state.Root 'Shims'
+                    ShimDir = $null
+                }) -RuntimeContext $runtimeContext
+
+            $installedState = Get-ProfileInstallationState -ProfilePath $state.ProfilePath
+            $installedState.HasManagedBlocks | Should Be $true
+            $windowsPowerShellProfileState = Get-ProfileInstallationState -ProfilePath $state.WindowsPowerShellProfilePath
+            $windowsPowerShellProfileState.HasManagedBlocks | Should Be $true
         }
     }
 }

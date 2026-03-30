@@ -5,7 +5,7 @@
     Author            = 'softerist'
     CompanyName       = 'softerist'
     Copyright         = '(c) softerist. All rights reserved.'
-    Description       = 'Adds Unix-compatible tools to Windows PATH with optional shims and profile wrappers.'
+    Description       = 'Adds Unix-compatible tools to Windows PATH using real app executables.'
     PowerShellVersion = '5.1'
     FunctionsToExport = @('Enable-UnixTool')
     CmdletsToExport   = @()
@@ -31,8 +31,6 @@
         'src\Private\ProfileSupportInstall.ps1'
         'src\Private\RuntimeContext.ps1'
         'src\Private\TerminalSetup.ps1'
-        'src\ProfileSupport\UnixTools.AliasCompat.ps1'
-        'src\ProfileSupport\UnixTools.MissingShims.ps1'
         'src\ProfileSupport\UnixTools.ProfileLoader.ps1'
         'src\ProfileSupport\UnixTools.ProfileShared.ps1'
         'src\ProfileSupport\UnixTools.Prompt.ps1'
@@ -41,8 +39,8 @@
     )
     PrivateData       = @{
         PSData = @{
-            Tags         = @('unix', 'windows', 'path', 'shims', 'cli')
-            ReleaseNotes = 'Adds startup-mode and prompt-mode controls, legacy profile cleanup, wrapper parity, and safer uninstall semantics.'
+            Tags         = @('unix', 'windows', 'path', 'cli')
+            ReleaseNotes = 'Prefers real app executables on PATH and cleans up legacy shim layers during install or uninstall.'
         }
     }
 }

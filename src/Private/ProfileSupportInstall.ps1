@@ -33,11 +33,23 @@ function Get-ManagedProfileSupportFileNameList {
     return @(
         'UnixTools.ProfileLoader.ps1',
         'UnixTools.ProfileShared.ps1',
-        'UnixTools.MissingShims.ps1',
-        'UnixTools.AliasCompat.ps1',
         'UnixTools.SmartShell.ps1',
         'UnixTools.Prompt.ps1',
         'UnixTools.ProfileConfig.psd1'
+    )
+}
+
+function Get-ManagedLegacyProfileSupportFileNameList {
+    return @(
+        'UnixTools.MissingShims.ps1',
+        'UnixTools.AliasCompat.ps1'
+    )
+}
+
+function Get-ManagedProfileRuntimeCacheFileNameList {
+    return @(
+        'UnixTools.OhMyPosh.Init.ps1',
+        'UnixTools.Zoxide.Init.ps1'
     )
 }
 
@@ -85,6 +97,82 @@ function New-ProfileSupportConfigText {
 "@
 }
 
+function Get-ProfileSupportCacheStamp {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return ''
+    }
+
+    $item = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
+    if (-not $item) {
+        return ''
+    }
+
+    return '{0}:{1}' -f $item.Length, $item.LastWriteTimeUtc.Ticks
+}
+
+function Initialize-ManagedProfileStartupCacheSet {
+    param(
+        [Parameter(Mandatory = $true)][string]$SupportRoot,
+        [Parameter(Mandatory = $true)][string]$PromptMode,
+        [string]$Theme = 'lightgreen',
+        [string]$ThemesDir = '',
+        [psobject]$RuntimeContext
+    )
+
+    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
+    if ($RuntimeContext.DryRun) {
+        return
+    }
+
+    if ($PromptMode -ne 'Off' -and -not [string]::IsNullOrWhiteSpace($ThemesDir)) {
+        $themeInfo = Resolve-ProfilePromptTheme -ThemesDir $ThemesDir -Theme $Theme
+        $configPath = [string]$themeInfo.ConfigPath
+        $ohMyPoshCommand = Get-Command oh-my-posh -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($ohMyPoshCommand -and -not [string]::IsNullOrWhiteSpace($configPath) -and (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+            $generated = oh-my-posh init pwsh --config "$configPath" | Out-String
+            $match = [regex]::Match($generated, "&\s+'([^']+)'")
+            if ($match.Success) {
+                $initPath = $match.Groups[1].Value
+                if (Test-Path -LiteralPath $initPath -PathType Leaf) {
+                    $exePath = [string]$ohMyPoshCommand.Source
+                    $escapedExePath = $exePath.Replace("'", "''")
+                    $escapedConfigPath = $configPath.Replace("'", "''")
+                    $escapedInitPath = $initPath.Replace("'", "''")
+                    $cacheContent = @(
+                        '# Kind: OhMyPosh'
+                        "# ExePath: $escapedExePath"
+                        "# ExeStamp: $(Get-ProfileSupportCacheStamp -Path $exePath)"
+                        "# ConfigPath: $escapedConfigPath"
+                        "# ConfigStamp: $(Get-ProfileSupportCacheStamp -Path $configPath)"
+                        "# InitPath: $escapedInitPath"
+                        '$env:POSH_SESSION_ID = [guid]::NewGuid().Guid'
+                        "& '$escapedInitPath'"
+                        ''
+                    ) -join "`n"
+                    Write-AtomicUtf8File -Path (Join-Path $SupportRoot 'UnixTools.OhMyPosh.Init.ps1') -Content $cacheContent -RuntimeContext $RuntimeContext
+                }
+            }
+        }
+    }
+
+    $zoxideCommand = Get-Command zoxide -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($zoxideCommand) {
+        $exePath = [string]$zoxideCommand.Source
+        $escapedExePath = $exePath.Replace("'", "''")
+        $generated = & $exePath init powershell --cmd j | Out-String
+        $cacheContent = @(
+            '# Kind: Zoxide'
+            "# ExePath: $escapedExePath"
+            "# ExeStamp: $(Get-ProfileSupportCacheStamp -Path $exePath)"
+            $generated
+            ''
+        ) -join "`n"
+        Write-AtomicUtf8File -Path (Join-Path $SupportRoot 'UnixTools.Zoxide.Init.ps1') -Content $cacheContent -RuntimeContext $RuntimeContext
+    }
+}
+
 function Write-ManagedProfileSupportPayload {
     param(
         [Parameter(Mandatory = $true)][string]$StartupMode,
@@ -98,8 +186,6 @@ function Write-ManagedProfileSupportPayload {
     foreach ($fileName in @(
             'UnixTools.ProfileLoader.ps1',
             'UnixTools.ProfileShared.ps1',
-            'UnixTools.MissingShims.ps1',
-            'UnixTools.AliasCompat.ps1',
             'UnixTools.SmartShell.ps1',
             'UnixTools.Prompt.ps1'
         )) {
@@ -109,6 +195,7 @@ function Write-ManagedProfileSupportPayload {
 
     $configText = New-ProfileSupportConfigText -SupportRoot $supportRoot -StartupMode $StartupMode -PromptMode $PromptMode -Theme $Theme -ThemesDir $ThemesDir -RuntimeContext $RuntimeContext
     Write-AtomicUtf8File -Path (Join-Path $supportRoot 'UnixTools.ProfileConfig.psd1') -Content $configText -RuntimeContext $RuntimeContext
+    Initialize-ManagedProfileStartupCacheSet -SupportRoot $supportRoot -PromptMode $PromptMode -Theme $Theme -ThemesDir $ThemesDir -RuntimeContext $RuntimeContext
 
     return $supportRoot
 }
@@ -123,7 +210,21 @@ function Remove-ManagedProfileSupportPayload {
         return $supportRoot
     }
 
-    foreach ($fileName in Get-ManagedProfileSupportFileNameList) {
+    foreach ($fileName in (@(Get-ManagedProfileSupportFileNameList) + @(Get-ManagedLegacyProfileSupportFileNameList))) {
+        $path = Join-Path $supportRoot $fileName
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            continue
+        }
+
+        if ($RuntimeContext.DryRun) {
+            Write-DryRun "Remove-Item '$path' -Force"
+        }
+        else {
+            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    foreach ($fileName in Get-ManagedProfileRuntimeCacheFileNameList) {
         $path = Join-Path $supportRoot $fileName
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             continue
@@ -220,7 +321,7 @@ function Get-ProfilePromptBlockBody {
     param(
         [Parameter(Mandatory = $true)][string]$ThemesDir,
         [string]$Theme = 'lightgreen',
-        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Eager',
+        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Lazy',
         [psobject]$RuntimeContext
     )
 
@@ -246,9 +347,11 @@ function Install-ProfileInlineSupport {
     )
 
     $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
-    $profilePath = $PROFILE.CurrentUserCurrentHost
-    $backup = Backup-ProfileFile -ProfilePath $profilePath -RuntimeContext $RuntimeContext
-    if ($backup) { Write-Status -Type detail -Label 'Profile backup' -Detail (Split-Path $backup -Leaf) -RuntimeContext $RuntimeContext }
+    $profilePaths = @(Get-ManagedUserProfilePathList)
+    foreach ($profilePath in $profilePaths) {
+        $backup = Backup-ProfileFile -ProfilePath $profilePath -RuntimeContext $RuntimeContext
+        if ($backup) { Write-Status -Type detail -Label 'Profile backup' -Detail (Split-Path $backup -Leaf) -RuntimeContext $RuntimeContext }
+    }
 
     Remove-InstalledProfileSupport -RuntimeContext $RuntimeContext | Out-Null
     $supportRoot = Write-ManagedProfileSupportPayload -StartupMode $StartupMode -PromptMode $PromptMode -Theme $Theme -ThemesDir $ThemesDir -RuntimeContext $RuntimeContext
@@ -256,29 +359,19 @@ function Install-ProfileInlineSupport {
     $startMarker = '# >>> unix-tools-profile >>>'
     $endMarker = '# <<< unix-tools-profile <<<'
     $blockBody = Get-ProfileLoaderBlockBody -SupportRoot $supportRoot -StartupMode $StartupMode -PromptMode $PromptMode
-    Set-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody -RuntimeContext $RuntimeContext
+    foreach ($profilePath in $profilePaths) {
+        Set-ProfileBlock -ProfilePath $profilePath -StartMarker $startMarker -EndMarker $endMarker -BlockBody $blockBody -RuntimeContext $RuntimeContext
+    }
 
-    Write-Status -Type ok -Label 'Profile blocks' -Detail "loader (startup=$StartupMode, prompt=$PromptMode) -> $profilePath" -RuntimeContext $RuntimeContext
+    Write-Status -Type ok -Label 'Profile blocks' -Detail "loader (startup=$StartupMode, prompt=$PromptMode) -> $($profilePaths -join ', ')" -RuntimeContext $RuntimeContext
     return 'profile-loader'
-}
-
-function Install-ProfileMissingSupport {
-    param([psobject]$RuntimeContext)
-
-    Install-ProfileInlineSupport -StartupMode 'Fast' -PromptMode 'Off' -RuntimeContext $RuntimeContext
-}
-
-function Install-ProfileAliasCompat {
-    param([psobject]$RuntimeContext)
-
-    Install-ProfileInlineSupport -StartupMode 'Fast' -PromptMode 'Off' -RuntimeContext $RuntimeContext
 }
 
 function Install-ProfileOhMyPosh {
     param(
         [Parameter(Mandatory = $true)][string]$ThemesDir,
         [string]$Theme = 'lightgreen',
-        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Eager',
+        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Lazy',
         [psobject]$RuntimeContext
     )
 

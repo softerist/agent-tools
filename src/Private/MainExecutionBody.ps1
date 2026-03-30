@@ -21,8 +21,6 @@ if ($InstallFull) {
     $NormalizePath = $true
     $InstallOptionalTools = $true
     $InstallTerminalSetup = $true
-    $CreateShims = $true
-    $InstallProfileShims = $true
 }
 
 $transcriptStarted = Start-ScriptTranscript -Path $LogPath -RuntimeContext $runtimeContext
@@ -51,7 +49,7 @@ try {
     $executionState = [pscustomobject]@{
         DidChange = $false
     }
-    $hasAdditionalActions = $Uninstall -or $InstallFull -or $CreateShims -or $AddMingw -or $AddGitCmd -or $NormalizePath -or $InstallProfileShims -or $InstallOptionalTools -or $InstallTerminalSetup
+    $hasAdditionalActions = $Uninstall -or $InstallFull -or $AddMingw -or $AddGitCmd -or $NormalizePath -or $InstallOptionalTools -or $InstallTerminalSetup
     $context = Get-ExecutionContext -AllowMissingGit:($Uninstall -or $UninstallFont) -RuntimeContext $runtimeContext
 
     if ($UninstallFont) {
@@ -67,10 +65,10 @@ try {
     }
 
     Invoke-PathConfigurationFlow -Cmdlet $PSCmdlet -State $executionState -Context $context -AddMingw:$AddMingw -AddGitCmd:$AddGitCmd -NormalizePath:$NormalizePath -InstallTerminalSetup:$InstallTerminalSetup -ThemesDir $ThemesDir -RuntimeContext $runtimeContext
+    Invoke-ProfileSetupFlow -Cmdlet $PSCmdlet -State $executionState -InstallFull:$InstallFull -ThemesDir $ThemesDir -Theme $Theme -ProfileStartupMode $ProfileStartupMode -PromptInitMode $PromptInitMode -RuntimeContext $runtimeContext
+    Invoke-ShimCleanupFlow -Cmdlet $PSCmdlet -State $executionState -Context $context -CreateShims:$CreateShims -InstallProfileShims:$InstallProfileShims -RuntimeContext $runtimeContext
     Invoke-OptionalToolFlow -Cmdlet $PSCmdlet -State $executionState -Context $context -InstallOptionalTools:$InstallOptionalTools -RuntimeContext $runtimeContext
-    Invoke-ShimFlow -Cmdlet $PSCmdlet -State $executionState -Context $context -CreateShims:$CreateShims -AddMingw:$AddMingw -RuntimeContext $runtimeContext
-    Invoke-ProfileSetupFlow -Cmdlet $PSCmdlet -State $executionState -InstallProfileShims:$InstallProfileShims -ThemesDir $ThemesDir -Theme $Theme -ProfileStartupMode $ProfileStartupMode -PromptInitMode $PromptInitMode -RuntimeContext $runtimeContext
-    Invoke-VerificationFlow -State $executionState -CreateShims:$CreateShims -InstallProfileShims:$InstallProfileShims -InstallOptionalTools:$InstallOptionalTools -RuntimeContext $runtimeContext
+    Invoke-VerificationFlow -State $executionState -InstallOptionalTools:$InstallOptionalTools -RuntimeContext $runtimeContext
 }
 finally {
     if ($transcriptStarted) {

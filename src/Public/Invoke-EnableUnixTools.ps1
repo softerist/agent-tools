@@ -16,7 +16,7 @@ function Invoke-UnixToolSetup {
         [string]$Theme = 'lightgreen',
         [string]$ThemesDir,
         [ValidateSet('Fast', 'Legacy')][string]$ProfileStartupMode = 'Fast',
-        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Eager',
+        [ValidateSet('Lazy', 'Eager', 'Off')][string]$PromptInitMode = 'Lazy',
         [string]$LogPath,
         [Alias('h')]
         [switch]$Help,

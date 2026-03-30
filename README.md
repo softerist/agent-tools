@@ -1,27 +1,27 @@
 # Enable-UnixTools
 
-Enable Unix-style CLI tooling on Windows by adding Git-for-Windows tool paths, optional shims, and profile compatibility helpers.
+Enable Unix-style CLI tooling on Windows by adding Git-for-Windows tool paths and optional app installs, without large fallback shim layers.
 
 ## Install From PowerShell Gallery
 
 ```powershell
 Install-Module -Name Enable-UnixTools
 Import-Module Enable-UnixTools
-Enable-UnixTools -InstallFull -ProfileStartupMode Fast -PromptInitMode Eager
+Enable-UnixTools -InstallFull -ProfileStartupMode Fast -PromptInitMode Lazy
 ```
 
 ## Basic Usage
 
 ```powershell
 Import-Module Enable-UnixTools -Force
-Enable-UnixTools -InstallFull -ProfileStartupMode Fast -PromptInitMode Eager
+Enable-UnixTools -InstallFull -ProfileStartupMode Fast -PromptInitMode Lazy
 ```
 
 Examples:
 
 ```powershell
 Enable-UnixTools -InstallFull -UserScope
-Enable-UnixTools -CreateShims -InstallProfileShims -InstallOptionalTools -InstallTerminalSetup -ProfileStartupMode Fast -PromptInitMode Eager
+Enable-UnixTools -InstallOptionalTools -InstallTerminalSetup
 Enable-UnixTools -Uninstall
 Enable-UnixTools -Uninstall -UninstallOptionalTools
 ```
@@ -29,13 +29,15 @@ Enable-UnixTools -Uninstall -UninstallOptionalTools
 Defaults:
 
 - `-ProfileStartupMode Fast` keeps startup imports minimal and exposes `Enable-UnixInteractiveFeatureSet` for on-demand shell extras.
-- `-PromptInitMode Eager` initializes Oh My Posh during profile load so the theme is active on the first prompt.
-- `uutils.coreutils` is installed as the base Unix command layer when optional tools are installed. For GNU-sensitive core commands like `ls`, `cp`, `mv`, `rm`, `cat`, and `sort`, resolution still prefers Git's binaries; for the rest, the shims prefer coreutils when both are present.
+- `-PromptInitMode Lazy` keeps profile load low by warming the full Oh My Posh prompt after the first prompt. Use `-PromptInitMode Eager` if you prefer the fully themed first prompt and can accept slower startup.
+- `uutils.coreutils` is installed as the base Unix command layer when optional tools are installed. For GNU-sensitive core commands like `ls`, `cp`, `mv`, `rm`, `cat`, and `sort`, resolution still prefers Git's binaries; for the rest, real executables on PATH are used directly.
+- PowerShell fallback shims are not installed. A small passthrough wrapper is installed only for the PowerShell-colliding command names `ls`, `cp`, `mv`, `rm`, `cat`, and `sort` so those names resolve to the real Unix executable instead of the built-in alias/cmdlet.
+- When `eza` is available, `ls` prefers `eza` over `ls.exe`. Classic `ls -lf` is translated to the closest `eza` equivalent.
 - `lightgreen.omp.json` is automatically patched after theme install to keep a cleaner right prompt and a more polished folder path. `Terminal-Icons` plus `CaskaydiaCove NF` provide the file/folder glyphs.
 
 ## Uninstall Semantics
 
-- Remove Unix tools configuration (PATH/shims/profile) and keep tracked optional tools:
+- Remove Unix tools configuration and keep tracked optional tools:
 
 ```powershell
 Enable-UnixTools -Uninstall
@@ -70,34 +72,33 @@ Check command resolution and defaults:
 
 ```powershell
 Get-Command Enable-UnixTools -All | Format-List CommandType,Source,Version,Definition
-$PSDefaultParameterValues.GetEnumerator() | Where-Object Key -match 'TrustedShimRoot|Enable-UnixTools'
+$PSDefaultParameterValues.GetEnumerator() | Where-Object Key -match 'Enable-UnixTools'
 ```
 
 If needed:
 
 ```powershell
-$PSDefaultParameterValues.Remove('*:TrustedShimRoot')
-Enable-UnixTools -UserScope -CreateShims -InstallProfileShims -InstallOptionalTools -InstallTerminalSetup -AddMingw -AddGitCmd -NormalizePath -ProfileStartupMode Fast -PromptInitMode Eager
+Enable-UnixTools -UserScope -InstallOptionalTools -InstallTerminalSetup -AddMingw -AddGitCmd -NormalizePath
 ```
 
-If an older profile install left unmarked inline shims behind, re-run:
+If an older install left shim wrappers behind, re-run:
 
 ```powershell
-Enable-UnixTools -InstallProfileShims -ProfileStartupMode Fast -PromptInitMode Eager
+Enable-UnixTools
 ```
 
 ### `rg` regex with `|` runs pieces as commands
 
-If `rg -n "a|b|c"` prints messages like `'b' is not recognized as an internal or external command`, PowerShell is resolving `rg` through a Git `shims\rg.cmd` wrapper instead of a real `rg.exe`. Refresh the generated profile shims:
+If `rg -n "a|b|c"` prints messages like `'b' is not recognized as an internal or external command`, PowerShell is likely resolving `rg` through a stale Git `shims\rg.cmd` wrapper instead of a real `rg.exe`. Re-run the installer to clean shim paths and keep only real apps:
 
 ```powershell
-Enable-UnixTools -InstallProfileShims -ProfileStartupMode Fast -PromptInitMode Eager
+Enable-UnixTools
 ```
 
 Then open a new PowerShell session and verify:
 
 ```powershell
-Get-UnixShimExecutable -Name rg | Format-List Name,Source
+Get-Command rg -All | Format-List Name,Source
 ```
 
 ### Codex shell shows `Terminal-Icons` or `oh-my-posh` startup warnings
@@ -105,7 +106,7 @@ Get-UnixShimExecutable -Name rg | Format-List Name,Source
 Codex and Antigravity shells can run with sandboxed or proxied startup behavior, so profile code that writes caches under `%APPDATA%` can be noisy. Current generated profiles automatically skip `Terminal-Icons` and `oh-my-posh` when Codex or Antigravity environment variables are present. Re-run profile installation to refresh an older profile:
 
 ```powershell
-Enable-UnixTools -InstallProfileShims -ProfileStartupMode Fast -PromptInitMode Eager
+Enable-UnixTools
 ```
 
 Git Bash and other `bash`-based agent shells do not read the PowerShell profile, so this specific fix does not apply there. If you initialize a prompt/theme in `.bashrc` or `.bash_profile`, gate it the same way:
