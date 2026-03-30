@@ -1,6 +1,6 @@
 @{
     RootModule        = 'Enable-UnixTools.psm1'
-    ModuleVersion     = '2.4.0'
+    ModuleVersion     = '2.5.0'
     GUID              = 'd5e6e1eb-b2f4-43fe-8e6c-a1fc50d47313'
     Author            = 'softerist'
     CompanyName       = 'softerist'
@@ -31,6 +31,10 @@
         'src\Private\ProfileSupportInstall.ps1'
         'src\Private\RuntimeContext.ps1'
         'src\Private\TerminalSetup.ps1'
+        'src\ProfileSupport\UnixTools.AliasCompat.ps1'
+        'src\ProfileSupport\UnixTools.MissingShims.ps1'
+        'src\ProfileSupport\UnixTools.AliasCompat.ps1'
+        'src\ProfileSupport\UnixTools.MissingShims.ps1'
         'src\ProfileSupport\UnixTools.ProfileLoader.ps1'
         'src\ProfileSupport\UnixTools.ProfileShared.ps1'
         'src\ProfileSupport\UnixTools.Prompt.ps1'

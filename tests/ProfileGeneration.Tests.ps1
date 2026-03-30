@@ -162,7 +162,7 @@ function Enable-UnixInteractiveFeatureSet {}
 
             @"
 @{
-    Version        = '2.4.0'
+    Version        = '2.5.0'
     StartupMode    = 'Fast'
     PromptInitMode = 'Lazy'
     Theme          = 'lightgreen'
@@ -208,11 +208,11 @@ echo LS_PASSTHROUGH %*
 '@ | Set-Content -Path (Join-Path $tempRoot 'ls.cmd') -Encoding ASCII
 
             Set-Variable -Name UnixToolsProfileConfig -Scope Global -Value ([pscustomobject]@{
-                StartupMode = 'Fast'
-                PromptInitMode = 'Off'
-                Theme = 'lightgreen'
-                ThemesDir = ''
-            })
+                    StartupMode    = 'Fast'
+                    PromptInitMode = 'Off'
+                    Theme          = 'lightgreen'
+                    ThemesDir      = ''
+                })
 
             . (Join-Path $repoRoot 'src\ProfileSupport\UnixTools.ProfileShared.ps1')
             . (Join-Path $repoRoot 'src\ProfileSupport\UnixTools.SmartShell.ps1')
@@ -264,12 +264,12 @@ echo LS_PASSTHROUGH %*
 echo EZA_PASSTHROUGH %*
 '@ | Set-Content -Path (Join-Path $tempRoot 'eza.cmd') -Encoding ASCII
 
-Set-Variable -Name UnixToolsProfileConfig -Scope Global -Value ([pscustomobject]@{
-    StartupMode = 'Fast'
-    PromptInitMode = 'Off'
-    Theme = 'lightgreen'
-    ThemesDir = ''
-})
+            Set-Variable -Name UnixToolsProfileConfig -Scope Global -Value ([pscustomobject]@{
+                    StartupMode    = 'Fast'
+                    PromptInitMode = 'Off'
+                    Theme          = 'lightgreen'
+                    ThemesDir      = ''
+                })
 
             . (Join-Path $repoRoot 'src\ProfileSupport\UnixTools.ProfileShared.ps1')
             . (Join-Path $repoRoot 'src\ProfileSupport\UnixTools.SmartShell.ps1')
