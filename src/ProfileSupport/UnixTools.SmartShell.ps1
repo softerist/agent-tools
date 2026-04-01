@@ -3,6 +3,11 @@ if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
     $script:SmartShellExeCache = @{}
     $script:UnixInteractiveFeaturesEnabled = $false
     $script:UnixToolsZoxideInitialized = $false
+    $allowAntigravityFullPrompt = $false
+    if (-not [string]::IsNullOrWhiteSpace($env:UNIXTOOLS_ALLOW_ANTIGRAVITY_FULL_PROMPT)) {
+        $allowAntigravityFullPrompt = $env:UNIXTOOLS_ALLOW_ANTIGRAVITY_FULL_PROMPT -match '^(1|true|yes|on)$'
+    }
+    $isAntigravityAgentShell = $env:ANTIGRAVITY_CLI_ALIAS -and -not $allowAntigravityFullPrompt
     $winGetLinks = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'
     $winGetPackages = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
     if ((Test-Path -LiteralPath $winGetLinks) -and -not (($env:PATH -split ';') -contains $winGetLinks)) {
@@ -217,7 +222,7 @@ if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
             return
         }
 
-        $isAgentShell = $env:CODEX_THREAD_ID -or $env:CODEX_INTERNAL_ORIGINATOR_OVERRIDE -or $env:ANTIGRAVITY_CLI_ALIAS
+        $isAgentShell = $env:CODEX_THREAD_ID -or $env:CODEX_INTERNAL_ORIGINATOR_OVERRIDE -or $isAntigravityAgentShell
         foreach ($module in @(
                 'CompletionPredictor',
                 'Microsoft.WinGet.CommandNotFound',

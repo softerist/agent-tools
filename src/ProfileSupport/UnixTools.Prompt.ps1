@@ -1,4 +1,9 @@
 $profileConfig = Get-UnixToolsProfileConfig
+$allowAntigravityFullPrompt = $false
+if (-not [string]::IsNullOrWhiteSpace($env:UNIXTOOLS_ALLOW_ANTIGRAVITY_FULL_PROMPT)) {
+    $allowAntigravityFullPrompt = $env:UNIXTOOLS_ALLOW_ANTIGRAVITY_FULL_PROMPT -match '^(1|true|yes|on)$'
+}
+$isAntigravityAgentShell = $env:ANTIGRAVITY_CLI_ALIAS -and -not $allowAntigravityFullPrompt
 
 function Invoke-UnixToolsCachedOhMyPoshInit {
     param([Parameter(Mandatory = $true)][string]$ConfigPath)
@@ -105,7 +110,7 @@ function Invoke-UnixToolsDeferredInteractivePrompt {
     Set-Item -Path Function:\Global:prompt -Value $wrapper
 }
 
-if ($profileConfig -and -not $env:CODEX_THREAD_ID -and -not $env:CODEX_INTERNAL_ORIGINATOR_OVERRIDE -and -not $env:ANTIGRAVITY_CLI_ALIAS -and (Get-Command oh-my-posh -ErrorAction SilentlyContinue)) {
+if ($profileConfig -and -not $env:CODEX_THREAD_ID -and -not $env:CODEX_INTERNAL_ORIGINATOR_OVERRIDE -and -not $isAntigravityAgentShell -and (Get-Command oh-my-posh -ErrorAction SilentlyContinue)) {
     $theme = if ([string]::IsNullOrWhiteSpace($profileConfig.Theme)) { 'lightgreen' } else { $profileConfig.Theme }
     $themesDir = $profileConfig.ThemesDir
 

@@ -33,7 +33,7 @@ Defaults:
 - `uutils.coreutils` is installed as the base Unix command layer when optional tools are installed. For GNU-sensitive core commands like `ls`, `cp`, `mv`, `rm`, `cat`, and `sort`, resolution still prefers Git's binaries; for the rest, real executables on PATH are used directly.
 - PowerShell fallback shims are not installed. A small passthrough wrapper is installed only for the PowerShell-colliding command names `ls`, `cp`, `mv`, `rm`, `cat`, and `sort` so those names resolve to the real Unix executable instead of the built-in alias/cmdlet.
 - When `eza` is available, `ls` prefers `eza` over `ls.exe`. Classic `ls -lf` is translated to the closest `eza` equivalent.
-- `lightgreen.omp.json` is automatically patched after theme install to keep a cleaner right prompt and a more polished folder path. `Terminal-Icons` plus `CaskaydiaCove NF` provide the file/folder glyphs.
+- The selected Oh My Posh theme is automatically patched after theme install to strip noisy right-prompt shell/time segments. `lightgreen.omp.json` also gets a more polished folder path. `Terminal-Icons` plus `CaskaydiaCove NF` provide the file/folder glyphs.
 
 ## Uninstall Semantics
 
@@ -107,6 +107,14 @@ Codex and Antigravity shells can run with sandboxed or proxied startup behavior,
 
 ```powershell
 Enable-UnixTools
+```
+
+If you want Antigravity to opt in to the full prompt/theme anyway, add this to Antigravity settings:
+
+```json
+"terminal.integrated.env.windows": {
+  "UNIXTOOLS_ALLOW_ANTIGRAVITY_FULL_PROMPT": "1"
+}
 ```
 
 Git Bash and other `bash`-based agent shells do not read the PowerShell profile, so this specific fix does not apply there. If you initialize a prompt/theme in `.bashrc` or `.bash_profile`, gate it the same way:

@@ -260,6 +260,7 @@ function Invoke-PathConfigurationFlow {
         [switch]$NormalizePath,
         [switch]$InstallTerminalSetup,
         [Parameter(Mandatory = $true)][string]$ThemesDir,
+        [string]$Theme = 'lightgreen',
         [Parameter(Mandatory = $true)][psobject]$RuntimeContext
     )
 
@@ -300,7 +301,7 @@ function Invoke-PathConfigurationFlow {
 
     if ($InstallTerminalSetup) {
         if ($Cmdlet.ShouldProcess('Terminal Setup', 'Install Oh My Posh themes and Nerd Fonts')) {
-            Install-TerminalSetup -ThemesDir $ThemesDir -RuntimeContext $RuntimeContext
+            Install-TerminalSetup -ThemesDir $ThemesDir -Theme $Theme -RuntimeContext $RuntimeContext
             $State.DidChange = $true
         }
     }
@@ -324,7 +325,9 @@ function Invoke-ProfileSetupFlow {
     }
 
     Write-Section 'Profile Setup' -RuntimeContext $RuntimeContext
-    if ($Cmdlet.ShouldProcess($PROFILE.CurrentUserCurrentHost, 'Install unix-tools profile loader and prompt support')) {
+    $profilePaths = @(Get-ManagedUserProfilePathList)
+    $profileTarget = if ($profilePaths.Count -gt 0) { $profilePaths -join ', ' } else { [string]$PROFILE.CurrentUserCurrentHost }
+    if ($Cmdlet.ShouldProcess($profileTarget, 'Install unix-tools profile loader and prompt support')) {
         Install-ProfileInlineSupport -ThemesDir $ThemesDir -Theme $Theme -StartupMode $ProfileStartupMode -PromptMode $PromptInitMode -RuntimeContext $RuntimeContext | Out-Null
         $State.DidChange = $true
         Write-Status -Type ok -Label 'Profile support installed' -Detail "startup=$ProfileStartupMode, prompt=$PromptInitMode" -RuntimeContext $RuntimeContext

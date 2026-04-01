@@ -34,7 +34,9 @@ Describe 'Generated profile blocks' {
     It 'skips Terminal-Icons in Codex and Antigravity shells' {
         $block = Get-ProfileSmartShellBlockBody -StartupMode Fast
 
-        ($block -match '\$isAgentShell = \$env:CODEX_THREAD_ID -or \$env:CODEX_INTERNAL_ORIGINATOR_OVERRIDE -or \$env:ANTIGRAVITY_CLI_ALIAS') | Should Be $true
+        ($block -match 'UNIXTOOLS_ALLOW_ANTIGRAVITY_FULL_PROMPT') | Should Be $true
+        ($block -match '\$isAntigravityAgentShell = \$env:ANTIGRAVITY_CLI_ALIAS -and -not \$allowAntigravityFullPrompt') | Should Be $true
+        ($block -match '\$isAgentShell = \$env:CODEX_THREAD_ID -or \$env:CODEX_INTERNAL_ORIGINATOR_OVERRIDE -or \$isAntigravityAgentShell') | Should Be $true
         ($block -match [regex]::Escape("if (`$isAgentShell -and `$module -eq 'Terminal-Icons')")) | Should Be $true
     }
 
@@ -63,6 +65,7 @@ Describe 'Generated profile blocks' {
         ($block -match '# Prompt init mode: Lazy') | Should Be $true
         ($block -match 'CODEX_THREAD_ID') | Should Be $true
         ($block -match 'ANTIGRAVITY_CLI_ALIAS') | Should Be $true
+        ($block -match 'UNIXTOOLS_ALLOW_ANTIGRAVITY_FULL_PROMPT') | Should Be $true
         ($block -match "UnixToolsPromptState = 'Pending'") | Should Be $true
         ($block -match 'function global:prompt') | Should Be $true
         ($block -match 'Invoke-UnixToolsDeferredInteractivePrompt') | Should Be $true
@@ -75,6 +78,7 @@ Describe 'Generated profile blocks' {
         ($block -match '# Prompt init mode: Eager') | Should Be $true
         ($block -match 'CODEX_INTERNAL_ORIGINATOR_OVERRIDE') | Should Be $true
         ($block -match 'ANTIGRAVITY_CLI_ALIAS') | Should Be $true
+        ($block -match 'UNIXTOOLS_ALLOW_ANTIGRAVITY_FULL_PROMPT') | Should Be $true
         ($block -match 'Get-UnixToolsProfileConfig') | Should Be $true
         ($block -match 'Invoke-UnixToolsCachedOhMyPoshInit') | Should Be $true
     }
@@ -118,6 +122,7 @@ Describe 'Generated profile blocks' {
         { "type": "executiontime" },
         { "type": "sysinfo" },
         { "type": "battery" },
+        { "type": "shell" },
         { "type": "time" }
       ]
     }
@@ -134,6 +139,41 @@ Describe 'Generated profile blocks' {
             $pathSegment.template | Should Be ' {{ .Path }} '
             ($pathSegment.options.folder_separator_icon -match '#F4F1DE') | Should Be $true
             ($pathSegment.options.folder_separator_icon -match '#7DD3FC') | Should Be $false
+            (@($theme.blocks | Select-Object -ExpandProperty type) -contains 'rprompt') | Should Be $false
+        }
+        finally {
+            Remove-Item -Path $themesDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'removes noisy shell and time right-prompt segments from a requested theme during install' {
+        $themesDir = Join-Path ([System.IO.Path]::GetTempPath()) ('agent-tools-themes-' + [guid]::NewGuid())
+        try {
+            New-Item -ItemType Directory -Path $themesDir -Force | Out-Null
+            $themePath = Join-Path $themesDir 'jandedobbeleer.omp.json'
+            @'
+{
+  "blocks": [
+    {
+      "type": "prompt",
+      "segments": [
+        { "type": "path" }
+      ]
+    },
+    {
+      "type": "rprompt",
+      "segments": [
+        { "type": "shell" },
+        { "type": "time" }
+      ]
+    }
+  ]
+}
+'@ | Set-Content -Path $themePath -Encoding UTF8
+
+            Update-ManagedOhMyPoshTheme -ThemesDir $themesDir -Theme 'jandedobbeleer'
+
+            $theme = Get-Content -Raw -Path $themePath | ConvertFrom-Json
             (@($theme.blocks | Select-Object -ExpandProperty type) -contains 'rprompt') | Should Be $false
         }
         finally {
@@ -308,5 +348,3 @@ echo EZA_PASSTHROUGH %*
         }
     }
 }
-
-

@@ -26,6 +26,7 @@ function Get-ManagedUserProfilePathList {
     $profilePaths = New-Object System.Collections.Generic.List[string]
 
     $currentHostProfilePath = $null
+    $allHostsProfilePath = $null
     try {
         $currentHostProfilePath = $PROFILE.CurrentUserCurrentHost
     }
@@ -33,8 +34,19 @@ function Get-ManagedUserProfilePathList {
         $currentHostProfilePath = $null
     }
 
+    try {
+        $allHostsProfilePath = $PROFILE.CurrentUserAllHosts
+    }
+    catch {
+        $allHostsProfilePath = $null
+    }
+
     if (-not [string]::IsNullOrWhiteSpace($currentHostProfilePath)) {
         $profilePaths.Add($currentHostProfilePath) | Out-Null
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($allHostsProfilePath)) {
+        $profilePaths.Add($allHostsProfilePath) | Out-Null
     }
 
     $userHome = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
@@ -48,7 +60,10 @@ function Get-ManagedUserProfilePathList {
     }
 
     if (-not [string]::IsNullOrWhiteSpace($userHome)) {
+        $profilePaths.Add((Join-Path $userHome 'Documents\PowerShell\profile.ps1')) | Out-Null
         $profilePaths.Add((Join-Path $userHome 'Documents\PowerShell\Microsoft.PowerShell_profile.ps1')) | Out-Null
+        $profilePaths.Add((Join-Path $userHome 'Documents\PowerShell\Microsoft.VSCode_profile.ps1')) | Out-Null
+        $profilePaths.Add((Join-Path $userHome 'Documents\WindowsPowerShell\profile.ps1')) | Out-Null
         $profilePaths.Add((Join-Path $userHome 'Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1')) | Out-Null
     }
 

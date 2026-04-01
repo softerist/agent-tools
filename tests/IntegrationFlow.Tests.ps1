@@ -29,7 +29,10 @@ function New-IntegrationUserState {
     $appData = Join-Path $root 'AppData'
     $pwshDocumentsDir = Join-Path $userProfile 'Documents\PowerShell'
     $windowsPowerShellDocumentsDir = Join-Path $userProfile 'Documents\WindowsPowerShell'
+    $allHostsProfilePath = Join-Path $pwshDocumentsDir 'profile.ps1'
     $profilePath = Join-Path $pwshDocumentsDir 'Microsoft.PowerShell_profile.ps1'
+    $vsCodeProfilePath = Join-Path $pwshDocumentsDir 'Microsoft.VSCode_profile.ps1'
+    $windowsPowerShellAllHostsProfilePath = Join-Path $windowsPowerShellDocumentsDir 'profile.ps1'
     $windowsPowerShellProfilePath = Join-Path $windowsPowerShellDocumentsDir 'Microsoft.PowerShell_profile.ps1'
 
     foreach ($dir in @($localAppData, $userProfile, $appData, $pwshDocumentsDir, $windowsPowerShellDocumentsDir)) {
@@ -41,7 +44,10 @@ function New-IntegrationUserState {
         LocalAppData = $localAppData
         UserProfile = $userProfile
         AppData     = $appData
+        AllHostsProfilePath = $allHostsProfilePath
         ProfilePath = $profilePath
+        VSCodeProfilePath = $vsCodeProfilePath
+        WindowsPowerShellAllHostsProfilePath = $windowsPowerShellAllHostsProfilePath
         WindowsPowerShellProfilePath = $windowsPowerShellProfilePath
         SupportRoot = Join-Path $localAppData 'UnixToolsSystemWide\profile'
     }
@@ -65,6 +71,7 @@ function Invoke-WithTemporaryUserState {
         $env:USERPROFILE = $state.UserProfile
         $env:APPDATA = $state.AppData
         $global:PROFILE = [pscustomobject]@{
+            CurrentUserAllHosts = $state.AllHostsProfilePath
             CurrentUserCurrentHost = $state.ProfilePath
         }
 
@@ -128,7 +135,10 @@ Describe 'Integration flows' {
 
             Enable-UnixTools -UserScope -InstallProfileShims -PromptInitMode Off -WhatIf
 
+            (Test-Path -LiteralPath $state.AllHostsProfilePath -PathType Leaf) | Should Be $false
             (Test-Path -LiteralPath $state.ProfilePath -PathType Leaf) | Should Be $false
+            (Test-Path -LiteralPath $state.VSCodeProfilePath -PathType Leaf) | Should Be $false
+            (Test-Path -LiteralPath $state.WindowsPowerShellAllHostsProfilePath -PathType Leaf) | Should Be $false
             (Test-Path -LiteralPath $state.WindowsPowerShellProfilePath -PathType Leaf) | Should Be $false
             (Test-Path -LiteralPath $state.SupportRoot -PathType Container) | Should Be $false
         }
@@ -168,10 +178,16 @@ Describe 'Integration flows' {
 
             Install-ProfileInlineSupport -ThemesDir (Join-Path $state.Root 'Themes') -Theme 'lightgreen' -StartupMode Fast -PromptMode Off -RuntimeContext $runtimeContext | Out-Null
 
+            $allHostsState = Get-ProfileInstallationState -ProfilePath $state.AllHostsProfilePath
+            $allHostsState.HasManagedBlocks | Should Be $true
             $installedState = Get-ProfileInstallationState -ProfilePath $state.ProfilePath
             $installedState.HasManagedBlocks | Should Be $true
             $installedState.StartupMode | Should Be 'Fast'
             $installedState.PromptInitMode | Should Be 'Off'
+            $vsCodeProfileState = Get-ProfileInstallationState -ProfilePath $state.VSCodeProfilePath
+            $vsCodeProfileState.HasManagedBlocks | Should Be $true
+            $windowsPowerShellAllHostsProfileState = Get-ProfileInstallationState -ProfilePath $state.WindowsPowerShellAllHostsProfilePath
+            $windowsPowerShellAllHostsProfileState.HasManagedBlocks | Should Be $true
             $windowsPowerShellProfileState = Get-ProfileInstallationState -ProfilePath $state.WindowsPowerShellProfilePath
             $windowsPowerShellProfileState.HasManagedBlocks | Should Be $true
 
@@ -184,8 +200,14 @@ Describe 'Integration flows' {
 
             Remove-InstalledProfileSupport -RuntimeContext $runtimeContext | Out-Null
 
+            $removedAllHostsState = Get-ProfileInstallationState -ProfilePath $state.AllHostsProfilePath
+            $removedAllHostsState.HasManagedBlocks | Should Be $false
             $removedState = Get-ProfileInstallationState -ProfilePath $state.ProfilePath
             $removedState.HasManagedBlocks | Should Be $false
+            $removedVSCodeProfileState = Get-ProfileInstallationState -ProfilePath $state.VSCodeProfilePath
+            $removedVSCodeProfileState.HasManagedBlocks | Should Be $false
+            $removedWindowsPowerShellAllHostsState = Get-ProfileInstallationState -ProfilePath $state.WindowsPowerShellAllHostsProfilePath
+            $removedWindowsPowerShellAllHostsState.HasManagedBlocks | Should Be $false
             $removedWindowsPowerShellState = Get-ProfileInstallationState -ProfilePath $state.WindowsPowerShellProfilePath
             $removedWindowsPowerShellState.HasManagedBlocks | Should Be $false
             (Test-Path -LiteralPath $state.SupportRoot -PathType Container) | Should Be $false
@@ -211,7 +233,10 @@ Describe 'Integration flows' {
 
                 Enable-UnixTools -UserScope -InstallProfileShims -PromptInitMode Off -WhatIf
 
+                (Test-Path -LiteralPath $state.AllHostsProfilePath -PathType Leaf) | Should Be $false
                 (Test-Path -LiteralPath $state.ProfilePath -PathType Leaf) | Should Be $false
+                (Test-Path -LiteralPath $state.VSCodeProfilePath -PathType Leaf) | Should Be $false
+                (Test-Path -LiteralPath $state.WindowsPowerShellAllHostsProfilePath -PathType Leaf) | Should Be $false
                 (Test-Path -LiteralPath $state.WindowsPowerShellProfilePath -PathType Leaf) | Should Be $false
                 (Test-Path -LiteralPath $state.SupportRoot -PathType Container) | Should Be $false
             }
@@ -239,10 +264,16 @@ Describe 'Integration flows' {
 
             Invoke-ProfileSetupFlow -Cmdlet $cmdletStub -State $stateBag -InstallFull -ThemesDir (Join-Path $state.Root 'Themes') -Theme 'lightgreen' -PromptInitMode Off -RuntimeContext $runtimeContext
 
+            $allHostsState = Get-ProfileInstallationState -ProfilePath $state.AllHostsProfilePath
+            $allHostsState.HasManagedBlocks | Should Be $true
             $installedState = Get-ProfileInstallationState -ProfilePath $state.ProfilePath
             $installedState.HasManagedBlocks | Should Be $true
             $installedState.StartupMode | Should Be 'Fast'
             $installedState.PromptInitMode | Should Be 'Off'
+            $vsCodeProfileState = Get-ProfileInstallationState -ProfilePath $state.VSCodeProfilePath
+            $vsCodeProfileState.HasManagedBlocks | Should Be $true
+            $windowsPowerShellAllHostsProfileState = Get-ProfileInstallationState -ProfilePath $state.WindowsPowerShellAllHostsProfilePath
+            $windowsPowerShellAllHostsProfileState.HasManagedBlocks | Should Be $true
             $windowsPowerShellProfileState = Get-ProfileInstallationState -ProfilePath $state.WindowsPowerShellProfilePath
             $windowsPowerShellProfileState.HasManagedBlocks | Should Be $true
             $stateBag.DidChange | Should Be $true
@@ -275,8 +306,14 @@ Describe 'Integration flows' {
                     ShimDir = $null
                 }) -RuntimeContext $runtimeContext
 
+            $allHostsState = Get-ProfileInstallationState -ProfilePath $state.AllHostsProfilePath
+            $allHostsState.HasManagedBlocks | Should Be $true
             $installedState = Get-ProfileInstallationState -ProfilePath $state.ProfilePath
             $installedState.HasManagedBlocks | Should Be $true
+            $vsCodeProfileState = Get-ProfileInstallationState -ProfilePath $state.VSCodeProfilePath
+            $vsCodeProfileState.HasManagedBlocks | Should Be $true
+            $windowsPowerShellAllHostsProfileState = Get-ProfileInstallationState -ProfilePath $state.WindowsPowerShellAllHostsProfilePath
+            $windowsPowerShellAllHostsProfileState.HasManagedBlocks | Should Be $true
             $windowsPowerShellProfileState = Get-ProfileInstallationState -ProfilePath $state.WindowsPowerShellProfilePath
             $windowsPowerShellProfileState.HasManagedBlocks | Should Be $true
         }

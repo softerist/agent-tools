@@ -64,7 +64,7 @@ try {
         return
     }
 
-    Invoke-PathConfigurationFlow -Cmdlet $PSCmdlet -State $executionState -Context $context -AddMingw:$AddMingw -AddGitCmd:$AddGitCmd -NormalizePath:$NormalizePath -InstallTerminalSetup:$InstallTerminalSetup -ThemesDir $ThemesDir -RuntimeContext $runtimeContext
+    Invoke-PathConfigurationFlow -Cmdlet $PSCmdlet -State $executionState -Context $context -AddMingw:$AddMingw -AddGitCmd:$AddGitCmd -NormalizePath:$NormalizePath -InstallTerminalSetup:$InstallTerminalSetup -ThemesDir $ThemesDir -Theme $Theme -RuntimeContext $runtimeContext
     Invoke-ProfileSetupFlow -Cmdlet $PSCmdlet -State $executionState -InstallFull:$InstallFull -ThemesDir $ThemesDir -Theme $Theme -ProfileStartupMode $ProfileStartupMode -PromptInitMode $PromptInitMode -RuntimeContext $runtimeContext
     Invoke-ShimCleanupFlow -Cmdlet $PSCmdlet -State $executionState -Context $context -CreateShims:$CreateShims -InstallProfileShims:$InstallProfileShims -RuntimeContext $runtimeContext
     Invoke-OptionalToolFlow -Cmdlet $PSCmdlet -State $executionState -Context $context -InstallOptionalTools:$InstallOptionalTools -RuntimeContext $runtimeContext

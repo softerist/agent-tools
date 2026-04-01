@@ -1,6 +1,7 @@
 function Save-TerminalThemeBundle {
     param(
         [Parameter(Mandatory = $true)][string]$ThemesDir,
+        [string]$Theme = 'lightgreen',
         [psobject]$RuntimeContext
     )
 
@@ -12,7 +13,7 @@ function Save-TerminalThemeBundle {
 
     if (Test-Path $ThemesDir) {
         Write-Status -Type info -Label "Themes directory" -Detail "already exists, skipping download" -Indent -RuntimeContext $RuntimeContext
-        Update-ManagedOhMyPoshTheme -ThemesDir $ThemesDir -RuntimeContext $RuntimeContext
+        Update-ManagedOhMyPoshTheme -ThemesDir $ThemesDir -Theme $Theme -RuntimeContext $RuntimeContext
         return
     }
 
@@ -23,7 +24,7 @@ function Save-TerminalThemeBundle {
         New-DirectoryIfMissing -dir $ThemesDir -RuntimeContext $RuntimeContext
         Write-Status -Type detail -Label "Extracting themes" -Detail $ThemesDir -Indent -RuntimeContext $RuntimeContext
         Expand-Archive -Path $zip -DestinationPath $ThemesDir -Force -ErrorAction Stop
-        Update-ManagedOhMyPoshTheme -ThemesDir $ThemesDir -RuntimeContext $RuntimeContext
+        Update-ManagedOhMyPoshTheme -ThemesDir $ThemesDir -Theme $Theme -RuntimeContext $RuntimeContext
     }
     catch {
         Write-Status -Type warn -Label "Themes failed" -Detail $_.Exception.Message -Indent -RuntimeContext $RuntimeContext
@@ -37,46 +38,61 @@ function Update-ManagedOhMyPoshTheme {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Theme file writes are gated by higher-level install flows and tested separately.')]
     param(
         [Parameter(Mandatory = $true)][string]$ThemesDir,
+        [string]$Theme = 'lightgreen',
         [psobject]$RuntimeContext
     )
 
-    $lightgreenThemePath = Join-Path $ThemesDir 'lightgreen.omp.json'
-    if (-not (Test-Path -LiteralPath $lightgreenThemePath -PathType Leaf)) {
-        Write-Verbose "Managed theme patch skipped: $lightgreenThemePath not found"
-        return
+    $effectiveTheme = if ([string]::IsNullOrWhiteSpace($Theme)) {
+        'lightgreen'
+    }
+    else {
+        [System.IO.Path]::GetFileNameWithoutExtension($Theme.Trim())
     }
 
-    $themeJson = Get-Content -Raw -Path $lightgreenThemePath | ConvertFrom-Json
-    $promptBlock = $themeJson.blocks | Where-Object { $_.type -eq 'prompt' } | Select-Object -First 1
-    $rpromptBlock = $themeJson.blocks | Where-Object { $_.type -eq 'rprompt' } | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($effectiveTheme)) {
+        $effectiveTheme = 'lightgreen'
+    }
 
-    if ($promptBlock) {
-        $pathSegment = $promptBlock.segments | Where-Object { $_.type -eq 'path' } | Select-Object -First 1
-        if ($pathSegment) {
-            $folderIcon = '<#A7F3D0>{0} </>' -f ([char]0xF07B)
-            $folderSeparatorIcon = ' <#F4F1DE>{0}</> ' -f ([char]0xE0B1)
-            $homeIcon = [string]([char]0xF015)
-            $pathSegment.foreground = '#F4F1DE'
-            $pathSegment.options = [pscustomobject]@{
-                style                 = 'agnoster_short'
-                max_depth             = 4
-                folder_icon           = $folderIcon
-                folder_separator_icon = $folderSeparatorIcon
-                home_icon             = $homeIcon
+    $themeNames = @($effectiveTheme, 'lightgreen') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+    foreach ($themeName in $themeNames) {
+        $themePath = Join-Path $ThemesDir ("{0}.omp.json" -f $themeName)
+        if (-not (Test-Path -LiteralPath $themePath -PathType Leaf)) {
+            Write-Verbose "Managed theme patch skipped: $themePath not found"
+            continue
+        }
+
+        $themeJson = Get-Content -Raw -Path $themePath | ConvertFrom-Json
+        $promptBlock = $themeJson.blocks | Where-Object { $_.type -eq 'prompt' } | Select-Object -First 1
+        $rpromptBlock = $themeJson.blocks | Where-Object { $_.type -eq 'rprompt' } | Select-Object -First 1
+
+        if ($themeName -eq 'lightgreen' -and $promptBlock) {
+            $pathSegment = $promptBlock.segments | Where-Object { $_.type -eq 'path' } | Select-Object -First 1
+            if ($pathSegment) {
+                $folderIcon = '<#A7F3D0>{0} </>' -f ([char]0xF07B)
+                $folderSeparatorIcon = ' <#F4F1DE>{0}</> ' -f ([char]0xE0B1)
+                $homeIcon = [string]([char]0xF015)
+                $pathSegment.foreground = '#F4F1DE'
+                $pathSegment.options = [pscustomobject]@{
+                    style                 = 'agnoster_short'
+                    max_depth             = 4
+                    folder_icon           = $folderIcon
+                    folder_separator_icon = $folderSeparatorIcon
+                    home_icon             = $homeIcon
+                }
+                $pathSegment.template = ' {{ .Path }} '
             }
-            $pathSegment.template = ' {{ .Path }} '
         }
-    }
 
-    if ($rpromptBlock) {
-        $rpromptBlock.segments = @($rpromptBlock.segments | Where-Object { $_.type -notin @('executiontime', 'sysinfo', 'battery', 'time') })
-        if (@($rpromptBlock.segments).Count -eq 0) {
-            $themeJson.blocks = @($themeJson.blocks | Where-Object { $_.type -ne 'rprompt' })
+        if ($rpromptBlock) {
+            $rpromptBlock.segments = @($rpromptBlock.segments | Where-Object { $_.type -notin @('executiontime', 'sysinfo', 'battery', 'shell', 'time') })
+            if (@($rpromptBlock.segments).Count -eq 0) {
+                $themeJson.blocks = @($themeJson.blocks | Where-Object { $_.type -ne 'rprompt' })
+            }
         }
-    }
 
-    $themeContent = $themeJson | ConvertTo-Json -Depth 100
-    Write-AtomicUtf8File -Path $lightgreenThemePath -Content $themeContent -RuntimeContext $RuntimeContext
+        $themeContent = $themeJson | ConvertTo-Json -Depth 100
+        Write-AtomicUtf8File -Path $themePath -Content $themeContent -RuntimeContext $RuntimeContext
+    }
 }
 
 function Install-NerdFont {
@@ -317,12 +333,13 @@ function Set-TerminalFontConfig {
 function Install-TerminalSetup {
     param(
         [Parameter(Mandatory = $true)][string]$ThemesDir,
+        [string]$Theme = 'lightgreen',
         [psobject]$RuntimeContext
     )
 
     Write-Section "Terminal Setup" -RuntimeContext $RuntimeContext
 
-    Save-TerminalThemeBundle -ThemesDir $ThemesDir -RuntimeContext $RuntimeContext
+    Save-TerminalThemeBundle -ThemesDir $ThemesDir -Theme $Theme -RuntimeContext $RuntimeContext
     Install-NerdFont -RuntimeContext $RuntimeContext
     Set-TerminalFontConfig -RuntimeContext $RuntimeContext
 }
