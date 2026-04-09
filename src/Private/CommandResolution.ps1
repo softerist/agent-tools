@@ -14,6 +14,10 @@ function Get-ApplicationSourcePriority {
         return 100
     }
 
+    if ($Name -eq 'ssh' -and $Source -match '(?i)\\Windows\\System32\\OpenSSH\\ssh\.exe$') {
+        return 0
+    }
+
     $preferGit = -not [string]::IsNullOrWhiteSpace($Name) -and (Test-GitPreferredCoreCommand -Name $Name)
 
     if ($Source -match '(?i)uutils[.\-_]?coreutils') {
@@ -75,4 +79,3 @@ function Test-CoreUtilsLayerAvailable {
 
     return $false
 }
-

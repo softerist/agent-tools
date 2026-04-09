@@ -14,7 +14,7 @@ if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
         $env:PATH = "$winGetLinks;$env:PATH"
     }
 
-    foreach ($name in @('ls', 'cp', 'mv', 'rm', 'cat', 'sort')) {
+    foreach ($name in @('ls', 'cp', 'mv', 'rm', 'cat', 'sort', 'ssh')) {
         Reset-UnixShimName -Name $name
 
         $commandName = $name
