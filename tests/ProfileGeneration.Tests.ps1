@@ -47,7 +47,7 @@ Describe 'Generated profile blocks' {
         ($block -match "StartupMode -eq 'Legacy'") | Should Be $true
         ($block -match 'function Initialize-UnixToolsPsReadLineState') | Should Be $true
         ($block -match 'function Invoke-UnixToolsDeferredZoxideCommand') | Should Be $true
-        ($block -match [regex]::Escape("foreach (`$name in @('ls', 'cp', 'mv', 'rm', 'cat', 'sort'))")) | Should Be $true
+        ($block -match [regex]::Escape("foreach (`$name in @('ls', 'cp', 'mv', 'rm', 'cat', 'sort', 'ssh'))")) | Should Be $true
         ($block -match "Get-PreferredApplicationCommand -Name 'eza'") | Should Be $true
         ($block -match 'Import-Module \$module -ErrorAction SilentlyContinue -WarningAction SilentlyContinue 2>\$null 3>\$null \| Out-Null') | Should Be $true
     }
@@ -332,6 +332,59 @@ echo EZA_PASSTHROUGH %*
         }
         finally {
             Remove-Item Function:\Global:Get-PreferredApplicationCommand -ErrorAction SilentlyContinue
+            Remove-Item Function:\Global:ls -ErrorAction SilentlyContinue
+            Remove-Item Function:\Global:cp -ErrorAction SilentlyContinue
+            Remove-Item Function:\Global:mv -ErrorAction SilentlyContinue
+            Remove-Item Function:\Global:rm -ErrorAction SilentlyContinue
+            Remove-Item Function:\Global:cat -ErrorAction SilentlyContinue
+            Remove-Item Function:\Global:sort -ErrorAction SilentlyContinue
+            Remove-Item Function:\Global:j -ErrorAction SilentlyContinue
+            Remove-Item Function:\Global:ji -ErrorAction SilentlyContinue
+            Remove-Item Function:\Global:y -ErrorAction SilentlyContinue
+            Remove-Item Function:\Global:lg -ErrorAction SilentlyContinue
+            Remove-Item Alias:\Global:Enable-UnixInteractiveFeatures -ErrorAction SilentlyContinue
+            Remove-Variable UnixToolsProfileConfig -Scope Global -ErrorAction SilentlyContinue
+            Remove-Item -Path $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'prefers Windows OpenSSH for ssh when the managed wrapper is present' {
+        $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agent-tools-ssh-pass-' + [guid]::NewGuid())
+        try {
+            New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+
+            @'
+@echo off
+echo SSH_PASSTHROUGH %*
+'@ | Set-Content -Path (Join-Path $tempRoot 'ssh.cmd') -Encoding ASCII
+
+            Set-Variable -Name UnixToolsProfileConfig -Scope Global -Value ([pscustomobject]@{
+                    StartupMode    = 'Fast'
+                    PromptInitMode = 'Off'
+                    Theme          = 'lightgreen'
+                    ThemesDir      = ''
+                })
+
+            . (Join-Path $repoRoot 'src\ProfileSupport\UnixTools.ProfileShared.ps1')
+            . (Join-Path $repoRoot 'src\ProfileSupport\UnixTools.SmartShell.ps1')
+
+            $sshPath = Join-Path $tempRoot 'ssh.cmd'
+            function global:Get-PreferredApplicationCommand {
+                param([Parameter(Mandatory = $true)][string]$Name)
+                if ($Name -eq 'ssh') {
+                    return [pscustomobject]@{ Source = $sshPath }
+                }
+                return $null
+            }
+
+            $sshCommand = Get-Command -Name ssh -CommandType Function
+            $sshCommand.CommandType | Should Be 'Function'
+            $output = (& $sshCommand test-host "type C:\temp\state.json" | Out-String)
+            $output | Should Match 'SSH_PASSTHROUGH test-host "type C:\\temp\\state.json"'
+        }
+        finally {
+            Remove-Item Function:\Global:Get-PreferredApplicationCommand -ErrorAction SilentlyContinue
+            Remove-Item Function:\Global:ssh -ErrorAction SilentlyContinue
             Remove-Item Function:\Global:ls -ErrorAction SilentlyContinue
             Remove-Item Function:\Global:cp -ErrorAction SilentlyContinue
             Remove-Item Function:\Global:mv -ErrorAction SilentlyContinue
