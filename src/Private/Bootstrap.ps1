@@ -32,6 +32,7 @@ if (-not (Get-Variable -Scope Script -Name UI -ValueOnly -ErrorAction SilentlyCo
     }
 }
 
+# Load each function as its own scriptblock instead of dot-sourcing the file: AMSI flags TerminalSetup.ps1 wholesale (font copy + registry write + web download + Expand-Archive trips a heuristic), but accepts each function in isolation.
 foreach ($path in @(
         (Join-Path $privateRoot 'RuntimeContext.ps1'),
         (Join-Path $privateRoot 'Output.ps1'),

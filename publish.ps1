@@ -4,11 +4,14 @@
     Interactive publisher for PowerShell Gallery.
 
 .DESCRIPTION
-    Builds a module package from a single installer script and publishes it to
-    PowerShell Gallery using Publish-Module.
+    Stages the committed module wrapper, manifest, and source tree into a temp
+    folder and hands it to Publish-Module. Module metadata (Author, Tags,
+    Description, ProjectUri, ReleaseNotes, etc.) is read straight from the
+    committed .psd1; this script does not regenerate it.
 
-    This script also handles legacy Windows PowerShell environments by ensuring
-    compatible PackageManagement and PowerShellGet versions are available.
+    On legacy Windows PowerShell hosts, bootstraps PackageManagement 1.4.8.1
+    and PowerShellGet 2.2.5 from PSGallery if missing, and auto-applies safe
+    preflight fixes (e.g., adding/enabling the dotnet nuget.org source).
 #>
 
 [CmdletBinding()]
@@ -16,13 +19,6 @@ param(
     [string]$SourceScriptPath,
     [string]$ModuleName,
     [string]$ModuleVersion,
-    [string]$Author,
-    [string]$Description,
-    [string]$Tags,
-    [string]$ReleaseNotes,
-    [string]$ProjectUri,
-    [string]$LicenseUri,
-    [string]$IconUri,
     [string]$ReadmePath,
     [string]$AboutPath,
     [string]$Repository = 'PSGallery',
@@ -32,46 +28,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Write-ConsoleLine {
-    param(
-        [AllowEmptyString()][string]$Message = '',
-        [ConsoleColor]$ForegroundColor
-    )
-
-    if ($Host -and $Host.UI) {
-        $rawUi = $null
-        try {
-            $rawUi = $Host.UI.RawUI
-        }
-        catch {
-            $rawUi = $null
-        }
-
-        if ($PSBoundParameters.ContainsKey('ForegroundColor') -and $rawUi) {
-            $originalColor = $rawUi.ForegroundColor
-            try {
-                $rawUi.ForegroundColor = $ForegroundColor
-                $Host.UI.WriteLine($Message)
-            }
-            finally {
-                $rawUi.ForegroundColor = $originalColor
-            }
-            return
-        }
-
-        $Host.UI.WriteLine($Message)
-        return
-    }
-
-    Write-Output $Message
+function Write-Step {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive publisher prints to the console.')]
+    param([string]$Message)
+    Write-Host "[STEP] $Message" -ForegroundColor Cyan
 }
 
-function Write-Step([string]$Message) {
-    Write-ConsoleLine -Message "[STEP] $Message" -ForegroundColor Cyan
-}
-
-function Write-Info([string]$Message) {
-    Write-ConsoleLine -Message "[INFO] $Message" -ForegroundColor DarkGray
+function Write-Info {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive publisher prints to the console.')]
+    param([string]$Message)
+    Write-Host "[INFO] $Message" -ForegroundColor DarkGray
 }
 
 function Read-Default([string]$Prompt, [string]$Default) {
@@ -94,34 +60,6 @@ function Read-YesNo([string]$Prompt, [bool]$Default = $true) {
         'no' { return $false }
         default { return $Default }
     }
-}
-
-function Convert-ToTagArray([string]$TagText) {
-    if ([string]::IsNullOrWhiteSpace($TagText)) { return @() }
-    $parts = $TagText -split '[,; ]+'
-    $set = New-Object System.Collections.Generic.HashSet[string]([StringComparer]::OrdinalIgnoreCase)
-    $out = New-Object System.Collections.Generic.List[string]
-    foreach ($p in $parts) {
-        $t = $p.Trim()
-        if ($t.Length -eq 0) { continue }
-        if ($set.Add($t)) { $out.Add($t) | Out-Null }
-    }
-    return @($out)
-}
-
-function Get-ScriptSynopsis([string]$Path) {
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return '' }
-    try {
-        $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
-        $m = [regex]::Match($raw, '(?ms)\.SYNOPSIS\s*(?<body>.*?)\r?\n\s*\.')
-        if ($m.Success) {
-            return (($m.Groups['body'].Value -replace '\r?\n', ' ').Trim())
-        }
-    }
-    catch {
-        Write-Verbose "Unable to read synopsis from '$Path': $($_.Exception.Message)"
-    }
-    return ''
 }
 
 function Get-DefaultReadmeContent {
@@ -186,25 +124,21 @@ function Get-DefaultAboutHelpContent {
 
 function Get-DefaultModuleRoot {
     if ($PSVersionTable.PSEdition -eq 'Core') {
-        return Join-Path $HOME 'Documents\\PowerShell\\Modules'
+        return Join-Path $HOME 'Documents\PowerShell\Modules'
     }
-    return Join-Path $HOME 'Documents\\WindowsPowerShell\\Modules'
+    return Join-Path $HOME 'Documents\WindowsPowerShell\Modules'
 }
 
 function Add-ModulePathIfMissing([string]$ModuleRoot) {
     if ([string]::IsNullOrWhiteSpace($ModuleRoot)) { return }
-    $paths = @($env:PSModulePath -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    $exists = $false
-    foreach ($p in $paths) {
-        if ($p.Trim().TrimEnd('\').Equals($ModuleRoot.Trim().TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
-            $exists = $true
-            break
+    $normalized = $ModuleRoot.Trim().TrimEnd('\')
+    foreach ($p in ($env:PSModulePath -split ';')) {
+        if (-not [string]::IsNullOrWhiteSpace($p) -and $p.Trim().TrimEnd('\').Equals($normalized, [StringComparison]::OrdinalIgnoreCase)) {
+            return
         }
     }
-    if (-not $exists) {
-        $env:PSModulePath = "$ModuleRoot;$env:PSModulePath"
-        Write-Info "Prepended module path for this session: $ModuleRoot"
-    }
+    $env:PSModulePath = "$ModuleRoot;$env:PSModulePath"
+    Write-Info "Prepended module path for this session: $ModuleRoot"
 }
 
 function Get-DotNetNuGetSource {
@@ -231,19 +165,18 @@ function Get-DotNetNuGetSource {
                     Url     = $matches[1].Trim()
                 }) | Out-Null
             $currentName = $null
-            $currentEnabled = $false
         }
     }
     return $sources.ToArray()
 }
 
-function Get-PublishPrereqIssue {
+function New-PrereqIssue {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory diagnostic record.')]
     param(
         [Parameter(Mandatory = $true)][string]$Title,
         [Parameter(Mandatory = $true)][string]$Detail,
         [string[]]$FixCommands = @()
     )
-
     return [pscustomobject]@{
         Title       = $Title
         Detail      = $Detail
@@ -254,39 +187,31 @@ function Get-PublishPrereqIssue {
 function Test-PublishEnvironment {
     $issues = New-Object System.Collections.Generic.List[object]
 
-    $dotnetCmd = Get-Command dotnet -ErrorAction SilentlyContinue
-    if (-not $dotnetCmd) {
-        $issues.Add((Get-PublishPrereqIssue `
+    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+        $issues.Add((New-PrereqIssue `
                     -Title 'Missing .NET SDK (dotnet)' `
                     -Detail 'Publish-Module uses dotnet pack internally. dotnet was not found on PATH.' `
                     -FixCommands @(
                         'winget install --id Microsoft.DotNet.SDK.10 --exact --accept-package-agreements --accept-source-agreements',
                         'dotnet --info'
                     ))) | Out-Null
-        return [pscustomobject]@{
-            Ready  = $false
-            Issues = $issues.ToArray()
-        }
+        return [pscustomobject]@{ Ready = $false; Issues = $issues.ToArray() }
     }
 
     $nugetUrl = 'https://api.nuget.org/v3/index.json'
     $normalizedNugetUrl = $nugetUrl.TrimEnd('/')
-    $sources = @()
     try {
         $sources = @(Get-DotNetNuGetSource)
     }
     catch {
-        $issues.Add((Get-PublishPrereqIssue `
+        $issues.Add((New-PrereqIssue `
                     -Title 'Unable to read dotnet NuGet sources' `
                     -Detail $_.Exception.Message `
                     -FixCommands @(
                         'dotnet nuget list source',
                         'dotnet nuget add source https://api.nuget.org/v3/index.json -n nuget.org'
                     ))) | Out-Null
-        return [pscustomobject]@{
-            Ready  = $false
-            Issues = $issues.ToArray()
-        }
+        return [pscustomobject]@{ Ready = $false; Issues = $issues.ToArray() }
     }
 
     $nugetEntry = $sources | Where-Object {
@@ -297,7 +222,7 @@ function Test-PublishEnvironment {
         Write-Info "Auto-fix: adding dotnet NuGet source '$nugetUrl' as 'nuget.org'..."
         & dotnet nuget add source $nugetUrl -n nuget.org | Out-Null
         if ($LASTEXITCODE -ne 0) {
-            $issues.Add((Get-PublishPrereqIssue `
+            $issues.Add((New-PrereqIssue `
                         -Title 'Missing dotnet NuGet source: nuget.org' `
                         -Detail "No source found for $nugetUrl, and automatic add failed." `
                         -FixCommands @(
@@ -310,7 +235,7 @@ function Test-PublishEnvironment {
         Write-Info "Auto-fix: enabling dotnet NuGet source '$($nugetEntry.Name)'..."
         & dotnet nuget enable source $nugetEntry.Name | Out-Null
         if ($LASTEXITCODE -ne 0) {
-            $issues.Add((Get-PublishPrereqIssue `
+            $issues.Add((New-PrereqIssue `
                         -Title "Disabled dotnet NuGet source: $($nugetEntry.Name)" `
                         -Detail "The source URL is present but disabled, and automatic enable failed: $($nugetEntry.Url)" `
                         -FixCommands @(
@@ -320,57 +245,28 @@ function Test-PublishEnvironment {
         }
     }
 
-    return [pscustomobject]@{
-        Ready  = ($issues.Count -eq 0)
-        Issues = $issues.ToArray()
-    }
+    return [pscustomobject]@{ Ready = ($issues.Count -eq 0); Issues = $issues.ToArray() }
 }
 
-function Write-PrereqFailureReport {
+function Write-IssueReport {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive publisher prints to the console.')]
     param(
+        [Parameter(Mandatory = $true)][string]$Heading,
         [Parameter(Mandatory = $true)][object[]]$Issues
     )
-
-    Write-ConsoleLine
-    Write-ConsoleLine -Message 'Preflight failed. Publish was not started.' -ForegroundColor Red
+    Write-Host ''
+    Write-Host $Heading -ForegroundColor Red
     foreach ($issue in $Issues) {
-        Write-ConsoleLine -Message "- $($issue.Title)" -ForegroundColor Red
-        Write-ConsoleLine -Message "  $($issue.Detail)" -ForegroundColor DarkGray
+        Write-Host "- $($issue.Title)" -ForegroundColor Red
+        Write-Host "  $($issue.Detail)" -ForegroundColor DarkGray
         if ($issue.FixCommands -and $issue.FixCommands.Count -gt 0) {
-            Write-ConsoleLine -Message '  Fix:' -ForegroundColor Yellow
+            Write-Host '  Fix:' -ForegroundColor Yellow
             foreach ($cmd in $issue.FixCommands) {
-                Write-ConsoleLine -Message "    $cmd" -ForegroundColor Yellow
+                Write-Host "    $cmd" -ForegroundColor Yellow
             }
         }
     }
-    Write-ConsoleLine
-}
-
-function Write-PublishFailure {
-    param(
-        [Parameter(Mandatory = $true)][string]$Title,
-        [Parameter(Mandatory = $true)][string]$Detail,
-        [string[]]$FixCommands = @(),
-        [string]$RawError
-    )
-
-    Write-ConsoleLine
-    Write-ConsoleLine -Message 'Publish failed. Package was not uploaded.' -ForegroundColor Red
-    Write-ConsoleLine -Message "- $Title" -ForegroundColor Red
-    Write-ConsoleLine -Message "  $Detail" -ForegroundColor DarkGray
-    if ($FixCommands -and $FixCommands.Count -gt 0) {
-        Write-ConsoleLine -Message '  Fix:' -ForegroundColor Yellow
-        foreach ($cmd in $FixCommands) {
-            if (-not [string]::IsNullOrWhiteSpace($cmd)) {
-                Write-ConsoleLine -Message "    $cmd" -ForegroundColor Yellow
-            }
-        }
-    }
-    if (-not [string]::IsNullOrWhiteSpace($RawError)) {
-        $singleLine = ($RawError -replace '\s+', ' ').Trim()
-        Write-Verbose "Raw publish error: $singleLine"
-    }
-    Write-ConsoleLine
+    Write-Host ''
 }
 
 function Import-RequiredModuleVersion {
@@ -385,7 +281,7 @@ function Import-RequiredModuleVersion {
         return
     }
     catch {
-        $candidateManifest = Join-Path $ModuleRoot "$Name\\$Version\\$Name.psd1"
+        $candidateManifest = Join-Path $ModuleRoot "$Name\$Version\$Name.psd1"
         if (Test-Path -LiteralPath $candidateManifest -PathType Leaf) {
             Write-Info "Import fallback via manifest path: $candidateManifest"
             Import-Module -Name $candidateManifest -Force -ErrorAction Stop
@@ -396,6 +292,7 @@ function Import-RequiredModuleVersion {
 }
 
 function Install-ModuleNupkg {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Bootstrap helper installs to a known per-user module root.')]
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][string]$Version,
@@ -417,16 +314,14 @@ function Install-ModuleNupkg {
     $null = New-Item -ItemType Directory -Path $extractPath -Force
     [System.IO.Compression.ZipFile]::ExtractToDirectory($nupkgPath, $extractPath)
 
-    $manifestCandidates = @(Get-ChildItem -Path $extractPath -Recurse -Filter "$Name.psd1" -File -ErrorAction SilentlyContinue)
-    if ($manifestCandidates.Count -eq 0) {
+    $manifestSource = Get-ChildItem -Path $extractPath -Recurse -Filter "$Name.psd1" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $manifestSource) {
         throw "Could not locate $Name.psd1 inside downloaded package."
     }
-    $manifestSource = $manifestCandidates | Select-Object -First 1
-    $sourceDir = Split-Path -Parent $manifestSource.FullName
 
-    $dest = Join-Path $ModuleRoot "$Name\\$Version"
+    $dest = Join-Path $ModuleRoot "$Name\$Version"
     $null = New-Item -ItemType Directory -Path $dest -Force
-    Copy-Item -Path (Join-Path $sourceDir '*') -Destination $dest -Recurse -Force
+    Copy-Item -Path (Join-Path (Split-Path -Parent $manifestSource.FullName) '*') -Destination $dest -Recurse -Force
 
     Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
     return (Join-Path $dest "$Name.psd1")
@@ -437,24 +332,18 @@ function Initialize-PublishToolchain {
     $null = New-Item -ItemType Directory -Path $moduleRoot -Force
     Add-ModulePathIfMissing -ModuleRoot $moduleRoot
 
-    try {
-        Import-RequiredModuleVersion -Name 'PackageManagement' -Version '1.4.8.1' -ModuleRoot $moduleRoot
-    }
-    catch {
-        Write-Info 'PackageManagement 1.4.8.1 not available. Bootstrapping from PSGallery...'
-        $pmManifest = Install-ModuleNupkg -Name 'PackageManagement' -Version '1.4.8.1' -ModuleRoot $moduleRoot
-        Write-Info "Installed PackageManagement manifest: $pmManifest"
-        Import-RequiredModuleVersion -Name 'PackageManagement' -Version '1.4.8.1' -ModuleRoot $moduleRoot
-    }
-
-    try {
-        Import-RequiredModuleVersion -Name 'PowerShellGet' -Version '2.2.5' -ModuleRoot $moduleRoot
-    }
-    catch {
-        Write-Info 'PowerShellGet 2.2.5 not available. Bootstrapping from PSGallery...'
-        $psgManifest = Install-ModuleNupkg -Name 'PowerShellGet' -Version '2.2.5' -ModuleRoot $moduleRoot
-        Write-Info "Installed PowerShellGet manifest: $psgManifest"
-        Import-RequiredModuleVersion -Name 'PowerShellGet' -Version '2.2.5' -ModuleRoot $moduleRoot
+    foreach ($pair in @(
+            @{ Name = 'PackageManagement'; Version = '1.4.8.1' },
+            @{ Name = 'PowerShellGet'; Version = '2.2.5' }
+        )) {
+        try {
+            Import-RequiredModuleVersion -Name $pair.Name -Version $pair.Version -ModuleRoot $moduleRoot
+        }
+        catch {
+            Write-Info "$($pair.Name) $($pair.Version) not available. Bootstrapping from PSGallery..."
+            Install-ModuleNupkg -Name $pair.Name -Version $pair.Version -ModuleRoot $moduleRoot | Out-Null
+            Import-RequiredModuleVersion -Name $pair.Name -Version $pair.Version -ModuleRoot $moduleRoot
+        }
     }
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -497,6 +386,7 @@ function Assert-RequestedModuleVersionMatchesManifest {
 }
 
 function Initialize-ModulePackage {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Stages files into a per-invocation temp directory.')]
     param(
         [Parameter(Mandatory = $true)][string]$SourceScript,
         [Parameter(Mandatory = $true)][string]$Name,
@@ -510,9 +400,7 @@ function Initialize-ModulePackage {
     $moduleDir = Join-Path $stagingRoot $Name
     $null = New-Item -ItemType Directory -Path $moduleDir -Force
 
-    $sourceLeaf = Split-Path -Leaf $SourceScript
-    $sourceCopy = Join-Path $moduleDir $sourceLeaf
-    Copy-Item -LiteralPath $SourceScript -Destination $sourceCopy -Force
+    Copy-Item -LiteralPath $SourceScript -Destination (Join-Path $moduleDir (Split-Path -Leaf $SourceScript)) -Force
 
     $readmeTarget = Join-Path $moduleDir 'README.md'
     if (-not [string]::IsNullOrWhiteSpace($ReadmeSourcePath) -and (Test-Path -LiteralPath $ReadmeSourcePath -PathType Leaf)) {
@@ -522,8 +410,7 @@ function Initialize-ModulePackage {
         Set-Content -LiteralPath $readmeTarget -Value (Get-DefaultReadmeContent -Name $Name -Version $Version -Description $ModuleDescription -SourceScript $SourceScript) -Encoding UTF8
     }
 
-    $aboutLeaf = "about_{0}.help.txt" -f $Name
-    $aboutTarget = Join-Path $moduleDir $aboutLeaf
+    $aboutTarget = Join-Path $moduleDir ("about_{0}.help.txt" -f $Name)
     if (-not [string]::IsNullOrWhiteSpace($AboutSourcePath) -and (Test-Path -LiteralPath $AboutSourcePath -PathType Leaf)) {
         Copy-Item -LiteralPath $AboutSourcePath -Destination $aboutTarget -Force
     }
@@ -532,8 +419,6 @@ function Initialize-ModulePackage {
     }
 
     $sourceDir = Split-Path -Parent $SourceScript
-    $psm1Path = Join-Path $moduleDir ("{0}.psm1" -f $Name)
-    $manifestPath = Join-Path $moduleDir ("{0}.psd1" -f $Name)
     $sourceWrapperPath = Join-Path $sourceDir ("{0}.psm1" -f $Name)
     $sourceManifestPath = Join-Path $sourceDir ("{0}.psd1" -f $Name)
 
@@ -544,7 +429,8 @@ function Initialize-ModulePackage {
         throw "Committed module manifest not found: $sourceManifestPath"
     }
 
-    Copy-Item -LiteralPath $sourceWrapperPath -Destination $psm1Path -Force
+    $manifestPath = Join-Path $moduleDir ("{0}.psd1" -f $Name)
+    Copy-Item -LiteralPath $sourceWrapperPath -Destination (Join-Path $moduleDir ("{0}.psm1" -f $Name)) -Force
     Copy-Item -LiteralPath $sourceManifestPath -Destination $manifestPath -Force
 
     foreach ($extraDirName in @('src', 'catalogs')) {
@@ -560,8 +446,14 @@ function Initialize-ModulePackage {
         StagingRoot = $stagingRoot
         ModulePath  = $moduleDir
         Manifest    = $manifestPath
-        SourceCopy  = $sourceCopy
+        SourceCopy  = (Join-Path $moduleDir (Split-Path -Leaf $SourceScript))
     }
+}
+
+# ---- main ----------------------------------------------------------------
+
+if ($MyInvocation.InvocationName -eq '.') {
+    return
 }
 
 Write-Step 'PowerShell Gallery Interactive Publisher'
@@ -569,7 +461,7 @@ Write-Step 'PowerShell Gallery Interactive Publisher'
 Write-Step 'Running preflight checks'
 $preflight = Test-PublishEnvironment
 if (-not $preflight.Ready) {
-    Write-PrereqFailureReport -Issues $preflight.Issues
+    Write-IssueReport -Heading 'Preflight failed. Publish was not started.' -Issues $preflight.Issues
     return
 }
 Write-Info 'Preflight checks passed.'
@@ -588,95 +480,38 @@ if ([string]::IsNullOrWhiteSpace($ModuleName)) {
     $ModuleName = Read-Default -Prompt 'Module name' -Default $defaultName
 }
 
+$manifestSourcePath = Join-Path (Split-Path -Parent $SourceScriptPath) ("{0}.psd1" -f $ModuleName)
 if ([string]::IsNullOrWhiteSpace($ModuleVersion)) {
-    $manifestPath = Join-Path (Split-Path -Parent $SourceScriptPath) ("{0}.psd1" -f $ModuleName)
-    $ModuleVersion = Read-Default -Prompt 'Module version (SemVer)' -Default (Get-ManifestVersionDefault -Path $manifestPath)
+    $ModuleVersion = Read-Default -Prompt 'Module version (SemVer)' -Default (Get-ManifestVersionDefault -Path $manifestSourcePath)
 }
 else {
-    $manifestPath = Join-Path (Split-Path -Parent $SourceScriptPath) ("{0}.psd1" -f $ModuleName)
-    Assert-RequestedModuleVersionMatchesManifest -RequestedVersion $ModuleVersion -ManifestPath $manifestPath
+    Assert-RequestedModuleVersionMatchesManifest -RequestedVersion $ModuleVersion -ManifestPath $manifestSourcePath
 }
 
-if ([string]::IsNullOrWhiteSpace($Author)) {
-    $gitAuthor = ''
-    try {
-        $gitAuthor = (git config user.name 2>$null)
-    }
-    catch {
-        Write-Verbose "Unable to read git user.name: $($_.Exception.Message)"
-    }
-    if ([string]::IsNullOrWhiteSpace($gitAuthor)) { $gitAuthor = 'softerist' }
-    $Author = Read-Default -Prompt 'Author' -Default $gitAuthor
-}
-
-if ([string]::IsNullOrWhiteSpace($Description)) {
-    $defaultSynopsis = Get-ScriptSynopsis -Path $SourceScriptPath
-    if ([string]::IsNullOrWhiteSpace($defaultSynopsis)) {
-        $defaultSynopsis = 'Adds Unix-compatible tools to Windows PATH using real app executables.'
-    }
-    $Description = Read-Default -Prompt 'Module description' -Default $defaultSynopsis
-}
-
-if ([string]::IsNullOrWhiteSpace($Tags)) {
-    $Tags = Read-Default -Prompt 'Tags (comma-separated)' -Default 'unix,windows,path,cli'
-}
-
-if ([string]::IsNullOrWhiteSpace($ReleaseNotes)) {
-    $ReleaseNotes = Read-Default -Prompt 'Release notes' -Default ("Publish {0} {1}" -f $ModuleName, $ModuleVersion)
-}
-
-if ([string]::IsNullOrWhiteSpace($ProjectUri)) {
-    $remoteUrl = ''
-    try {
-        $remoteUrl = (git config --get remote.origin.url 2>$null)
-    }
-    catch {
-        Write-Verbose "Unable to read git remote.origin.url: $($_.Exception.Message)"
-    }
-    if ($remoteUrl -match '^https://') {
-        $ProjectUri = Read-Default -Prompt 'Project URI' -Default $remoteUrl
-    }
-    else {
-        $ProjectUri = Read-Default -Prompt 'Project URI' -Default ''
-    }
-}
-
-if ([string]::IsNullOrWhiteSpace($LicenseUri) -and -not [string]::IsNullOrWhiteSpace($ProjectUri)) {
-    $LicenseUri = Read-Default -Prompt 'License URI' -Default ($ProjectUri.TrimEnd('/') + '/blob/main/LICENSE')
-}
-elseif ([string]::IsNullOrWhiteSpace($LicenseUri)) {
-    $LicenseUri = Read-Default -Prompt 'License URI' -Default ''
-}
-
-if ([string]::IsNullOrWhiteSpace($IconUri) -and -not [string]::IsNullOrWhiteSpace($ProjectUri)) {
-    $IconUri = Read-Default -Prompt 'Icon URI' -Default ''
-}
-elseif ([string]::IsNullOrWhiteSpace($IconUri)) {
-    $IconUri = Read-Default -Prompt 'Icon URI' -Default ''
-}
+$manifestData = Import-PowerShellDataFile -Path $manifestSourcePath
+$packageDescription = if ($manifestData.Description) { [string]$manifestData.Description } else { $ModuleName }
 
 if ([string]::IsNullOrWhiteSpace($ReadmePath)) {
     $defaultReadme = Join-Path $PSScriptRoot 'README.md'
-    if (Test-Path -LiteralPath $defaultReadme -PathType Leaf) {
-        $ReadmePath = Read-Default -Prompt 'README path (blank = auto-generate)' -Default $defaultReadme
+    $ReadmePath = if (Test-Path -LiteralPath $defaultReadme -PathType Leaf) {
+        Read-Default -Prompt 'README path (blank = auto-generate)' -Default $defaultReadme
     }
     else {
-        $ReadmePath = Read-Default -Prompt 'README path (blank = auto-generate)' -Default ''
+        Read-Default -Prompt 'README path (blank = auto-generate)' -Default ''
     }
+}
+if (-not [string]::IsNullOrWhiteSpace($ReadmePath) -and -not (Test-Path -LiteralPath $ReadmePath -PathType Leaf)) {
+    throw "README file not found: $ReadmePath"
 }
 
 if ([string]::IsNullOrWhiteSpace($AboutPath)) {
     $defaultAbout = Join-Path $PSScriptRoot ("about_{0}.help.txt" -f $ModuleName)
-    if (Test-Path -LiteralPath $defaultAbout -PathType Leaf) {
-        $AboutPath = Read-Default -Prompt 'about_*.help.txt path (blank = auto-generate)' -Default $defaultAbout
+    $AboutPath = if (Test-Path -LiteralPath $defaultAbout -PathType Leaf) {
+        Read-Default -Prompt 'about_*.help.txt path (blank = auto-generate)' -Default $defaultAbout
     }
     else {
-        $AboutPath = Read-Default -Prompt 'about_*.help.txt path (blank = auto-generate)' -Default ''
+        Read-Default -Prompt 'about_*.help.txt path (blank = auto-generate)' -Default ''
     }
-}
-
-if (-not [string]::IsNullOrWhiteSpace($ReadmePath) -and -not (Test-Path -LiteralPath $ReadmePath -PathType Leaf)) {
-    throw "README file not found: $ReadmePath"
 }
 if (-not [string]::IsNullOrWhiteSpace($AboutPath) -and -not (Test-Path -LiteralPath $AboutPath -PathType Leaf)) {
     throw "about help file not found: $AboutPath"
@@ -686,38 +521,26 @@ if ([string]::IsNullOrWhiteSpace($NuGetApiKey)) {
     $NuGetApiKey = Read-Host 'PowerShell Gallery NuGet API key'
 }
 if ([string]::IsNullOrWhiteSpace($NuGetApiKey)) {
-    Write-ConsoleLine
-    Write-ConsoleLine -Message 'Publish was not started.' -ForegroundColor Red
-    Write-ConsoleLine -Message '- Missing required input: NuGet API key' -ForegroundColor Red
-    Write-ConsoleLine -Message '  Enter a valid PowerShell Gallery API key when prompted.' -ForegroundColor DarkGray
-    Write-ConsoleLine -Message '  Get or rotate keys at: https://www.powershellgallery.com/account/apikeys' -ForegroundColor Yellow
-    Write-ConsoleLine
+    Write-IssueReport -Heading 'Publish was not started.' -Issues @(
+        New-PrereqIssue `
+            -Title 'Missing required input: NuGet API key' `
+            -Detail 'Enter a valid PowerShell Gallery API key when prompted.' `
+            -FixCommands @('Get or rotate keys at: https://www.powershellgallery.com/account/apikeys')
+    )
     return
 }
 
-Write-ConsoleLine
-Write-ConsoleLine -Message 'Publish Plan' -ForegroundColor Yellow
-Write-ConsoleLine -Message "- Source script : $SourceScriptPath"
-Write-ConsoleLine -Message "- Module name   : $ModuleName"
-Write-ConsoleLine -Message "- Version       : $ModuleVersion"
-Write-ConsoleLine -Message "- Author        : $Author"
-Write-ConsoleLine -Message "- Tags          : $Tags"
-Write-ConsoleLine -Message "- Repository    : $Repository"
-if (-not [string]::IsNullOrWhiteSpace($ReadmePath)) {
-    Write-ConsoleLine -Message "- README        : $ReadmePath"
-}
-else {
-    Write-ConsoleLine -Message "- README        : auto-generate"
-}
-if (-not [string]::IsNullOrWhiteSpace($AboutPath)) {
-    Write-ConsoleLine -Message "- About help    : $AboutPath"
-}
-else {
-    Write-ConsoleLine -Message "- About help    : auto-generate"
-}
+Write-Host ''
+Write-Host 'Publish Plan' -ForegroundColor Yellow
+Write-Host "- Source script : $SourceScriptPath"
+Write-Host "- Module name   : $ModuleName"
+Write-Host "- Version       : $ModuleVersion"
+Write-Host "- Repository    : $Repository"
+Write-Host ("- README        : {0}" -f ($(if ($ReadmePath) { $ReadmePath } else { 'auto-generate' })))
+Write-Host ("- About help    : {0}" -f ($(if ($AboutPath) { $AboutPath } else { 'auto-generate' })))
 
 if (-not $Force -and -not (Read-YesNo -Prompt 'Continue and publish?' -Default $true)) {
-    Write-ConsoleLine -Message 'Cancelled.' -ForegroundColor Yellow
+    Write-Host 'Cancelled.' -ForegroundColor Yellow
     return
 }
 
@@ -729,7 +552,7 @@ $package = Initialize-ModulePackage `
     -SourceScript $SourceScriptPath `
     -Name $ModuleName `
     -Version $ModuleVersion `
-    -ModuleDescription $Description `
+    -ModuleDescription $packageDescription `
     -ReadmeSourcePath $ReadmePath `
     -AboutSourcePath $AboutPath
 Write-Info "Staging path: $($package.ModulePath)"
@@ -752,28 +575,30 @@ try {
 catch {
     $msg = $_.Exception.Message
     if ($msg -match '403' -or $msg -match 'API key is invalid' -or $msg -match 'does not have permission') {
-        Write-PublishFailure `
-            -Title 'Authentication/authorization error' `
-            -Detail "PowerShell Gallery rejected the API key for module '$ModuleName'." `
-            -FixCommands @(
-                'Use a valid PSGallery API key (active, not expired, push scope).',
-                "Ensure your account is an owner of '$ModuleName'.",
-                'If key exposure is possible, revoke and rotate the key.',
-                'Re-run publish with the new key.'
-            ) `
-            -RawError $msg
+        Write-IssueReport -Heading 'Publish failed. Package was not uploaded.' -Issues @(
+            New-PrereqIssue `
+                -Title 'Authentication/authorization error' `
+                -Detail "PowerShell Gallery rejected the API key for module '$ModuleName'." `
+                -FixCommands @(
+                    'Use a valid PSGallery API key (active, not expired, push scope).',
+                    "Ensure your account is an owner of '$ModuleName'.",
+                    'If key exposure is possible, revoke and rotate the key.',
+                    'Re-run publish with the new key.'
+                )
+        )
         return
     }
     if ($msg -match 'Failed to generate the compressed file' -or $msg -match 'failed to pack' -or $msg -match 'NU1100') {
-        Write-PublishFailure `
-            -Title 'Packaging failed during dotnet restore/pack' `
-            -Detail 'Publish-Module could not build the temporary NuGet package (commonly missing/disabled nuget.org source).' `
-            -FixCommands @(
-                'dotnet nuget list source',
-                'dotnet nuget add source https://api.nuget.org/v3/index.json -n nuget.org',
-                'dotnet nuget enable source nuget.org'
-            ) `
-            -RawError $msg
+        Write-IssueReport -Heading 'Publish failed. Package was not uploaded.' -Issues @(
+            New-PrereqIssue `
+                -Title 'Packaging failed during dotnet restore/pack' `
+                -Detail 'Publish-Module could not build the temporary NuGet package (commonly missing/disabled nuget.org source).' `
+                -FixCommands @(
+                    'dotnet nuget list source',
+                    'dotnet nuget add source https://api.nuget.org/v3/index.json -n nuget.org',
+                    'dotnet nuget enable source nuget.org'
+                )
+        )
         return
     }
     throw
@@ -782,7 +607,7 @@ catch {
 Write-Step 'Verifying publish result'
 $published = Find-Module -Name $ModuleName -Repository $Repository -ErrorAction SilentlyContinue | Select-Object -First 1 Name, Version, PublishedDate, Author
 if ($published) {
-    Write-ConsoleLine -Message "Published: $($published.Name) $($published.Version)" -ForegroundColor Green
+    Write-Host "Published: $($published.Name) $($published.Version)" -ForegroundColor Green
     if ($published.PublishedDate) {
         Write-Info ("PublishedDate: {0}" -f $published.PublishedDate)
     }
@@ -798,5 +623,3 @@ if (Read-YesNo -Prompt 'Delete local staging folder?' -Default $true) {
 else {
     Write-Info ("Staging folder kept: {0}" -f $package.StagingRoot)
 }
-
-Write-ConsoleLine -Message 'Done.' -ForegroundColor Green
