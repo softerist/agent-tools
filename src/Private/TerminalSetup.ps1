@@ -228,7 +228,10 @@ function Update-EditorAndTerminalFontConfig {
     $editorPattern = '("editor\.fontFamily"\s*:\s*)"([^"]+)"'
     if ($content -match $editorPattern) {
         if ($Matches[2] -notmatch [regex]::Escape($fontFamily)) {
-            $content = $content -replace $editorPattern, ('$1"' + $fontFamily + ', `$2"')
+            $content = [regex]::Replace($content, $editorPattern, {
+                    param($match)
+                    return ('{0}"{1}, {2}"' -f $match.Groups[1].Value, $fontFamily, $match.Groups[2].Value)
+                })
             $updated = $true
         }
     }
@@ -242,7 +245,10 @@ function Update-EditorAndTerminalFontConfig {
     $terminalPattern = '("terminal\.integrated\.fontFamily"\s*:\s*)"([^"]+)"'
     if ($content -match $terminalPattern) {
         if ($Matches[2] -notmatch [regex]::Escape($fontFamily)) {
-            $content = $content -replace $terminalPattern, ('$1"' + $fontFamily + ', `$2"')
+            $content = [regex]::Replace($content, $terminalPattern, {
+                    param($match)
+                    return ('{0}"{1}, {2}"' -f $match.Groups[1].Value, $fontFamily, $match.Groups[2].Value)
+                })
             $updated = $true
         }
     }

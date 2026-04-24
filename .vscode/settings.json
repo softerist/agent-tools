@@ -1,0 +1,11 @@
+{
+    "workbench.colorCustomizations": {
+        "workbench.startupEditor": "none",
+        "editor.background": "#15151b",
+        "editor.foreground": "#c9d1d9",
+        "terminal.background": "#15151b",
+        "terminal.foreground": "#c9d1d9",
+        "sideBar.foreground": "#bdd6e7",
+        "sideBar.background": "#15151b"
+    }
+}

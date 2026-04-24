@@ -35,6 +35,7 @@ Describe 'Terminal setup' {
             @'
 {
     "editor.fontFamily": "Consolas",
+    "terminal.integrated.fontFamily": "Fira Code",
     "window.zoomLevel": 1
 }
 '@ | Set-Content -Path (Join-Path $codeSettingsDir 'settings.json') -Encoding UTF8
@@ -53,7 +54,11 @@ Describe 'Terminal setup' {
             $codeSettings = Get-Content -Path (Join-Path $codeSettingsDir 'settings.json') -Raw
             ($codeSettings -match '"editor\.fontFamily"\s*:') | Should Be $true
             ([regex]::Matches($codeSettings, 'CaskaydiaCove NF').Count -ge 2) | Should Be $true
-            ($codeSettings -match '"terminal\.integrated\.fontFamily"\s*:\s*"CaskaydiaCove NF"') | Should Be $true
+            ($codeSettings -match '"editor\.fontFamily"\s*:\s*"CaskaydiaCove NF, Consolas"') | Should Be $true
+            ($codeSettings -match '"terminal\.integrated\.fontFamily"\s*:\s*"CaskaydiaCove NF, Fira Code"') | Should Be $true
+            ($codeSettings -match '`Consolas') | Should Be $false
+            ($codeSettings -match '`Fira Code') | Should Be $false
+            ($codeSettings -match '"terminal\.integrated\.fontFamily"\s*:') | Should Be $true
 
             $antigravitySettings = Get-Content -Path (Join-Path $antigravitySettingsDir 'settings.json') -Raw
             ($antigravitySettings -match '"editor\.fontFamily"\s*:') | Should Be $true
