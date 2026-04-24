@@ -16,7 +16,6 @@
         'Enable-UnixTools.psd1'
         'Enable-UnixTools.ps1'
         'README.md'
-        'catalogs\core-shim-tools.json'
         'catalogs\optional-modules.json'
         'catalogs\optional-tools.json'
         'src\Private\Bootstrap.ps1'

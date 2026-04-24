@@ -1,11 +1,9 @@
 function Invoke-UnixToolSetup {
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium', PositionalBinding = $false)]
     param(
-        [switch]$CreateShims,
         [switch]$AddMingw,
         [switch]$AddGitCmd,
         [switch]$NormalizePath,
-        [switch]$InstallProfileShims,
         [switch]$InstallOptionalTools,
         [switch]$InstallTerminalSetup,
         [switch]$InstallFull,

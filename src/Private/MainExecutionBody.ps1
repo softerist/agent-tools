@@ -8,7 +8,7 @@ if ($Help) {
 if ($InstallFull -and $Uninstall) {
     throw "Cannot combine -InstallFull with -Uninstall. Choose one mode."
 }
-if ($Uninstall -and ($CreateShims -or $AddMingw -or $AddGitCmd -or $InstallProfileShims -or $InstallOptionalTools -or $InstallTerminalSetup -or $InstallFull -or $UninstallFont)) {
+if ($Uninstall -and ($AddMingw -or $AddGitCmd -or $InstallOptionalTools -or $InstallTerminalSetup -or $InstallFull -or $UninstallFont)) {
     throw "Cannot combine -Uninstall with install switches. Use -Uninstall alone."
 }
 if ($UninstallOptionalTools -and -not $Uninstall) {
@@ -66,7 +66,7 @@ try {
 
     Invoke-PathConfigurationFlow -Cmdlet $PSCmdlet -State $executionState -Context $context -AddMingw:$AddMingw -AddGitCmd:$AddGitCmd -NormalizePath:$NormalizePath -InstallTerminalSetup:$InstallTerminalSetup -ThemesDir $ThemesDir -Theme $Theme -RuntimeContext $runtimeContext
     Invoke-ProfileSetupFlow -Cmdlet $PSCmdlet -State $executionState -InstallFull:$InstallFull -ThemesDir $ThemesDir -Theme $Theme -ProfileStartupMode $ProfileStartupMode -PromptInitMode $PromptInitMode -RuntimeContext $runtimeContext
-    Invoke-ShimCleanupFlow -Cmdlet $PSCmdlet -State $executionState -Context $context -CreateShims:$CreateShims -InstallProfileShims:$InstallProfileShims -RuntimeContext $runtimeContext
+    Invoke-ShimCleanupFlow -Cmdlet $PSCmdlet -State $executionState -Context $context -RuntimeContext $runtimeContext
     Invoke-OptionalToolFlow -Cmdlet $PSCmdlet -State $executionState -Context $context -InstallOptionalTools:$InstallOptionalTools -RuntimeContext $runtimeContext
     Invoke-VerificationFlow -State $executionState -InstallOptionalTools:$InstallOptionalTools -RuntimeContext $runtimeContext
 }

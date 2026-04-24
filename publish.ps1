@@ -576,10 +576,6 @@ Write-Info 'Preflight checks passed.'
 
 if ([string]::IsNullOrWhiteSpace($SourceScriptPath)) {
     $defaultScript = Join-Path $PSScriptRoot 'Enable-UnixTools.ps1'
-    if (-not (Test-Path -LiteralPath $defaultScript -PathType Leaf)) {
-        $alt = Join-Path $PSScriptRoot 'Enable-UnixToolsSystemWide.ps1'
-        if (Test-Path -LiteralPath $alt -PathType Leaf) { $defaultScript = $alt }
-    }
     $SourceScriptPath = Read-Default -Prompt 'Installer script path' -Default $defaultScript
 }
 
@@ -616,13 +612,13 @@ if ([string]::IsNullOrWhiteSpace($Author)) {
 if ([string]::IsNullOrWhiteSpace($Description)) {
     $defaultSynopsis = Get-ScriptSynopsis -Path $SourceScriptPath
     if ([string]::IsNullOrWhiteSpace($defaultSynopsis)) {
-        $defaultSynopsis = 'Adds Unix-compatible tools to Windows PATH with optional shims and profile wrappers.'
+        $defaultSynopsis = 'Adds Unix-compatible tools to Windows PATH using real app executables.'
     }
     $Description = Read-Default -Prompt 'Module description' -Default $defaultSynopsis
 }
 
 if ([string]::IsNullOrWhiteSpace($Tags)) {
-    $Tags = Read-Default -Prompt 'Tags (comma-separated)' -Default 'unix,windows,path,shims,cli'
+    $Tags = Read-Default -Prompt 'Tags (comma-separated)' -Default 'unix,windows,path,cli'
 }
 
 if ([string]::IsNullOrWhiteSpace($ReleaseNotes)) {

@@ -4,11 +4,9 @@
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium', DefaultParameterSetName = 'Default')]
 param(
-    [switch]$CreateShims,
     [switch]$AddMingw,
     [switch]$AddGitCmd,
     [switch]$NormalizePath,
-    [switch]$InstallProfileShims,
     [switch]$InstallOptionalTools,
     [switch]$InstallTerminalSetup,
     [switch]$InstallFull,

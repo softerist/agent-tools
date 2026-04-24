@@ -439,22 +439,10 @@ function Invoke-ShimCleanupFlow {
         [Parameter(Mandatory = $true)]$Cmdlet,
         [Parameter(Mandatory = $true)][psobject]$State,
         [Parameter(Mandatory = $true)][psobject]$Context,
-        [switch]$CreateShims,
-        [switch]$InstallProfileShims,
         [Parameter(Mandatory = $true)][psobject]$RuntimeContext
     )
 
-    $deprecatedOptions = @()
-    if ($CreateShims) { $deprecatedOptions += '-CreateShims' }
-    if ($InstallProfileShims) { $deprecatedOptions += '-InstallProfileShims' }
-
-    if ($deprecatedOptions.Count -eq 0) {
-        Write-Section 'Command Resolution' -RuntimeContext $RuntimeContext
-    }
-    else {
-        Write-Section 'Shim Cleanup' -RuntimeContext $RuntimeContext
-        Write-Status -Type warn -Label 'Deprecated options' -Detail (($deprecatedOptions -join ', ') + ' ignored; only real tools are kept on PATH') -RuntimeContext $RuntimeContext
-    }
+    Write-Section 'Command Resolution' -RuntimeContext $RuntimeContext
 
     if ($Cmdlet.ShouldProcess($RuntimeContext.PathDisplay, 'Remove legacy shim directories and profile shim blocks')) {
         Remove-LegacyProfileShimSupport -Cmdlet $Cmdlet -State $State -RuntimeContext $RuntimeContext

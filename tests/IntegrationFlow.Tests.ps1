@@ -133,7 +133,7 @@ Describe 'Integration flows' {
 
             Import-Module $modulePath -Force
 
-            Enable-UnixTools -UserScope -InstallProfileShims -PromptInitMode Off -WhatIf
+            Enable-UnixTools -UserScope -PromptInitMode Off -WhatIf
 
             (Test-Path -LiteralPath $state.AllHostsProfilePath -PathType Leaf) | Should Be $false
             (Test-Path -LiteralPath $state.ProfilePath -PathType Leaf) | Should Be $false
@@ -231,7 +231,7 @@ Describe 'Integration flows' {
                 (Get-Command Enable-UnixTool).CommandType | Should Be 'Function'
                 (Get-Command Enable-UnixTools).ResolvedCommandName | Should Be 'Enable-UnixTool'
 
-                Enable-UnixTools -UserScope -InstallProfileShims -PromptInitMode Off -WhatIf
+                Enable-UnixTools -UserScope -PromptInitMode Off -WhatIf
 
                 (Test-Path -LiteralPath $state.AllHostsProfilePath -PathType Leaf) | Should Be $false
                 (Test-Path -LiteralPath $state.ProfilePath -PathType Leaf) | Should Be $false

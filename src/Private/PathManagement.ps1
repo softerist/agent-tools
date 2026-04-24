@@ -284,33 +284,6 @@ function New-DirectoryIfMissing {
     Initialize-Directory -Path $dir -RuntimeContext $RuntimeContext
 }
 
-function Write-ShimCmd {
-    param(
-        [string]$shimDir,
-        [string]$name,
-        [string]$targetExePath,
-        [psobject]$RuntimeContext
-    )
-
-    $RuntimeContext = Resolve-EnableUnixToolsRuntimeContext -RuntimeContext $RuntimeContext
-    if (-not (Test-Path $targetExePath)) { return $false }
-
-    $shimPath = Join-Path $shimDir "$name.cmd"
-    $safeTarget = $targetExePath -replace '%', '%%'
-    $content = @(
-        "@echo off"
-        "setlocal"
-        "set ""_unix_tool=$safeTarget"""
-        """%_unix_tool%"" %*"
-    ) -join "`r`n"
-    if ($RuntimeContext.DryRun) {
-        Write-DryRun "Write-AtomicAsciiFile '$shimPath' (Create shim for $name -> $targetExePath)"
-        return $true
-    }
-    Write-AtomicAsciiFile -Path $shimPath -Content $content -RuntimeContext $RuntimeContext
-    return $true
-}
-
 function Find-Tool([string]$toolName, [string[]]$searchDirs) {
     foreach ($dir in $searchDirs) {
         $exePath = Join-Path $dir "$toolName.exe"

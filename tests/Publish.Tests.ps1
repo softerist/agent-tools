@@ -68,7 +68,6 @@ Describe 'Publish packaging' {
     It 'tracks staged source files in the committed manifest file list' {
         $manifest = Import-PowerShellDataFile -Path $manifestPath
         $expectedFiles = @(
-            'catalogs\core-shim-tools.json',
             'catalogs\optional-modules.json',
             'catalogs\optional-tools.json',
             'src\Private\Bootstrap.ps1',

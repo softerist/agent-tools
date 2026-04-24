@@ -18,9 +18,6 @@ Import-SourceFunction -SourcePath (Join-Path $repoRoot 'src\Private\FileIO.ps1')
     'Write-AtomicUtf8File',
     'Write-AtomicAsciiFile'
 )
-Import-SourceFunction -SourcePath (Join-Path $repoRoot 'src\Private\PathManagement.ps1') -Names @(
-    'Write-ShimCmd'
-)
 Import-SourceFunction -SourcePath (Join-Path $repoRoot 'src\Private\TerminalSetup.ps1') -Names @(
     'Update-EditorAndTerminalFontConfig',
     'Update-WindowsTerminalFontConfig',
@@ -49,29 +46,6 @@ Describe 'Runtime mutation helpers' {
 
             (Test-Path -LiteralPath $tempRoot) | Should Be $false
             (Test-Path -LiteralPath $filePath) | Should Be $false
-        }
-        finally {
-            Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
-
-    It 'creates shim cmd files through the shared atomic write helper' {
-        $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agent-tools-shim-' + [guid]::NewGuid())
-        $targetPath = Join-Path $env:WINDIR 'System32\cmd.exe'
-        $runtimeContext = New-EnableUnixToolsRuntimeContext -PathScope 'User' -DryRun:$false
-
-        try {
-            New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
-
-            (Write-ShimCmd -shimDir $tempRoot -name 'sample' -targetExePath $targetPath -RuntimeContext $runtimeContext) | Should Be $true
-
-            $shimPath = Join-Path $tempRoot 'sample.cmd'
-            (Test-Path -LiteralPath $shimPath -PathType Leaf) | Should Be $true
-
-            $content = Get-Content -Path $shimPath -Raw
-            ($content -match '@echo off') | Should Be $true
-            ($content -match [regex]::Escape('set "_unix_tool=' + $targetPath + '"')) | Should Be $true
-            ($content -match [regex]::Escape('"%_unix_tool%" %*')) | Should Be $true
         }
         finally {
             Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue

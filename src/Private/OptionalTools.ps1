@@ -107,12 +107,6 @@ function Get-SmartShellOptionalModuleNameSet {
     return @(Get-OptionalPowerShellModuleCatalog -RuntimeContext $RuntimeContext | Select-Object -ExpandProperty ModuleName)
 }
 
-function Get-CoreShimToolCatalog {
-    param([psobject]$RuntimeContext)
-
-    return @(Read-CatalogJson -Name 'core-shim-tools.json' -RuntimeContext $RuntimeContext)
-}
-
 function Get-OptionalToolsStatePath {
     param([psobject]$RuntimeContext)
 

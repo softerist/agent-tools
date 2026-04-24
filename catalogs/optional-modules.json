@@ -8,14 +8,6 @@
     "Repository": "PSGallery"
   },
   {
-    "ModuleName": "PSFzf",
-    "Repository": "PSGallery"
-  },
-  {
-    "ModuleName": "ZLocation",
-    "Repository": "PSGallery"
-  },
-  {
     "ModuleName": "posh-git",
     "Repository": "PSGallery"
   },
