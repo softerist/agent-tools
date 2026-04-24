@@ -14,9 +14,5 @@
   {
     "ModuleName": "Terminal-Icons",
     "Repository": "PSGallery"
-  },
-  {
-    "ModuleName": "powershell-yaml",
-    "Repository": "PSGallery"
   }
 ]

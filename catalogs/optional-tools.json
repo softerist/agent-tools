@@ -28,11 +28,6 @@
     "ChocoId": "bat"
   },
   {
-    "Command": "gh",
-    "WingetId": "GitHub.cli",
-    "ChocoId": "gh"
-  },
-  {
     "Command": "oh-my-posh",
     "WingetId": "JanDeDobbeleer.OhMyPosh",
     "ChocoId": "oh-my-posh"

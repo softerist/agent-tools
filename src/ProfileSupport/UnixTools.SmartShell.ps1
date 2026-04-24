@@ -110,8 +110,7 @@ if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
                 'CompletionPredictor',
                 'Microsoft.WinGet.CommandNotFound',
                 'posh-git',
-                'Terminal-Icons',
-                'powershell-yaml'
+                'Terminal-Icons'
             )) {
             if ($isAgentShell -and $module -eq 'Terminal-Icons') {
                 continue
