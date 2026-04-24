@@ -1,4 +1,5 @@
 function Invoke-UnixToolSetup {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '', Justification = 'ShouldProcess is dispatched through the per-flow functions in MainOrchestration.ps1.')]
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium', PositionalBinding = $false)]
     param(
         [switch]$AddMingw,
@@ -23,31 +24,12 @@ function Invoke-UnixToolSetup {
 
     Set-StrictMode -Version Latest
     $ErrorActionPreference = 'Stop'
-    if ($false) {
-        $PSCmdlet.ShouldProcess('Invoke-UnixToolSetup', 'Delegate to MainExecutionBody.ps1') | Out-Null
-    }
 
-    $repoRoot = if ($script:EnableUnixToolsRepoRoot) {
-        $script:EnableUnixToolsRepoRoot
-    }
-    else {
-        Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-    }
-    $sourceRoot = if ($script:EnableUnixToolsSourceRoot) {
-        $script:EnableUnixToolsSourceRoot
-    }
-    else {
-        Split-Path $PSScriptRoot -Parent
-    }
-
-    $manifestPath = Join-Path $repoRoot 'Enable-UnixTools.psd1'
+    $repoRoot = $script:EnableUnixToolsRepoRoot
+    $sourceRoot = $script:EnableUnixToolsSourceRoot
+    $manifestPath = $script:EnableUnixToolsManifestPath
     $helpPath = Join-Path $repoRoot 'Enable-UnixTools.ps1'
-    $version = try {
-        [string](Import-PowerShellDataFile -Path $manifestPath).ModuleVersion
-    }
-    catch {
-        '0.0.0'
-    }
+    $version = $script:EnableUnixToolsVersion
 
     $ui = Get-EnableUnixToolsScriptValue -Name UI -Default (Get-DefaultEnableUnixToolsUi)
     $pathScope = if ($UserScope) { 'User' } else { 'Machine' }

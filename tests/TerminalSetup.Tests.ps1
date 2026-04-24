@@ -1,9 +1,25 @@
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$scriptPath = Join-Path $repoRoot 'Enable-UnixTools.ps1'
 . (Join-Path $PSScriptRoot 'Support\TestHelpers.ps1')
 
-Import-ScriptFunction -ScriptPath $scriptPath -Names @(
+Import-SourceFunction -SourcePath (Join-Path $repoRoot 'src\Private\RuntimeContext.ps1') -Names @(
+    'Get-EnableUnixToolsScriptValue',
+    'Get-DefaultEnableUnixToolsUi',
+    'New-EnableUnixToolsRuntimeContext',
+    'Resolve-EnableUnixToolsRuntimeContext',
+    'Test-EnableUnixToolsDryRun'
+)
+Import-SourceFunction -SourcePath (Join-Path $repoRoot 'src\Private\Output.ps1') -Names @(
+    'Write-DryRun'
+)
+Import-SourceFunction -SourcePath (Join-Path $repoRoot 'src\Private\FileIO.ps1') -Names @(
+    'Test-IsDryRunEnabled',
+    'Initialize-Directory',
+    'Write-AtomicTextFile',
+    'Write-AtomicUtf8File'
+)
+Import-SourceFunction -SourcePath (Join-Path $repoRoot 'src\Private\TerminalSetup.ps1') -Names @(
     'Set-TerminalFontConfig',
+    'Update-WindowsTerminalFontConfig',
     'Update-EditorAndTerminalFontConfig'
 )
 

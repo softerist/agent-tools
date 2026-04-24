@@ -1,5 +1,4 @@
-$bootstrapLoaded = Get-Variable -Scope Script -Name EnableUnixToolsBootstrapLoaded -ValueOnly -ErrorAction SilentlyContinue
-if ($bootstrapLoaded) {
+if (Get-Variable -Scope Script -Name EnableUnixToolsBootstrapLoaded -ValueOnly -ErrorAction SilentlyContinue) {
     return
 }
 
@@ -14,8 +13,8 @@ $script:EnableUnixToolsVersion = try {
 catch {
     '0.0.0'
 }
-$currentUi = Get-Variable -Scope Script -Name UI -ValueOnly -ErrorAction SilentlyContinue
-if (-not $currentUi) {
+
+if (-not (Get-Variable -Scope Script -Name UI -ValueOnly -ErrorAction SilentlyContinue)) {
     $script:UI = [pscustomobject]@{
         TL     = [string][char]0x256D
         TR     = [string][char]0x256E
@@ -57,12 +56,7 @@ foreach ($path in @(
         throw ($errors | ForEach-Object Message | Out-String)
     }
 
-    $functions = @($ast.FindAll({
-                param($node)
-                $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
-            }, $false))
-
-    foreach ($functionAst in $functions) {
+    foreach ($functionAst in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
         . ([scriptblock]::Create($functionAst.Extent.Text))
     }
 }
