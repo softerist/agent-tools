@@ -20,6 +20,7 @@ Describe 'Generated profile blocks' {
         ($shared -match 'function Get-UnixToolsProfileConfig') | Should Be $true
         ($shared -match 'function Get-PreferredApplicationCommand') | Should Be $true
         ($shared -match 'function Get-UnixShimExecutable') | Should Be $true
+        ($loader -match 'UnixTools.ProfileShared.ps1') | Should Be $true
         ($smartShell -match 'Get-PreferredApplicationCommand -Name \$commandName') | Should Be $true
     }
 
