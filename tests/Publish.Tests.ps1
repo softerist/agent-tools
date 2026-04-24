@@ -90,8 +90,5 @@ Describe 'Publish packaging' {
         foreach ($file in $manifest.FileList) {
             (Test-Path -LiteralPath (Join-Path $repoRoot $file) -PathType Leaf) | Should Be $true
         }
-
-        (@($manifest.FileList | Where-Object { $_ -eq 'src\ProfileSupport\UnixTools.AliasCompat.ps1' }).Count) | Should Be 0
-        (@($manifest.FileList | Where-Object { $_ -eq 'src\ProfileSupport\UnixTools.MissingShims.ps1' }).Count) | Should Be 0
     }
 }

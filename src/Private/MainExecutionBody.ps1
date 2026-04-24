@@ -60,13 +60,12 @@ try {
     }
 
     if ($Uninstall) {
-        Invoke-UninstallFlow -Cmdlet $PSCmdlet -State $executionState -Context $context -UninstallOptionalTools:$UninstallOptionalTools -RuntimeContext $runtimeContext
+        Invoke-UninstallFlow -Cmdlet $PSCmdlet -State $executionState -UninstallOptionalTools:$UninstallOptionalTools -RuntimeContext $runtimeContext
         return
     }
 
     Invoke-PathConfigurationFlow -Cmdlet $PSCmdlet -State $executionState -Context $context -AddMingw:$AddMingw -AddGitCmd:$AddGitCmd -NormalizePath:$NormalizePath -InstallTerminalSetup:$InstallTerminalSetup -ThemesDir $ThemesDir -Theme $Theme -RuntimeContext $runtimeContext
     Invoke-ProfileSetupFlow -Cmdlet $PSCmdlet -State $executionState -InstallFull:$InstallFull -ThemesDir $ThemesDir -Theme $Theme -ProfileStartupMode $ProfileStartupMode -PromptInitMode $PromptInitMode -RuntimeContext $runtimeContext
-    Invoke-ShimCleanupFlow -Cmdlet $PSCmdlet -State $executionState -Context $context -RuntimeContext $runtimeContext
     Invoke-OptionalToolFlow -Cmdlet $PSCmdlet -State $executionState -Context $context -InstallOptionalTools:$InstallOptionalTools -RuntimeContext $runtimeContext
     Invoke-VerificationFlow -State $executionState -InstallOptionalTools:$InstallOptionalTools -RuntimeContext $runtimeContext
 }

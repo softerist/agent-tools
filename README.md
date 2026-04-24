@@ -31,7 +31,7 @@ Defaults:
 - `-ProfileStartupMode Fast` keeps startup imports minimal and exposes `Enable-UnixInteractiveFeatureSet` for on-demand shell extras.
 - `-PromptInitMode Lazy` keeps profile load low by warming the full Oh My Posh prompt after the first prompt. Use `-PromptInitMode Eager` if you prefer the fully themed first prompt and can accept slower startup.
 - `uutils.coreutils` is installed as the base Unix command layer when optional tools are installed. For GNU-sensitive core commands like `ls`, `cp`, `mv`, `rm`, `cat`, and `sort`, resolution still prefers Git's binaries; for the rest, real executables on PATH are used directly.
-- PowerShell fallback shims are not installed. A small passthrough wrapper is installed only for the PowerShell-colliding command names `ls`, `cp`, `mv`, `rm`, `cat`, and `sort` so those names resolve to the real Unix executable instead of the built-in alias/cmdlet.
+- PowerShell fallback shim files are not installed. Lightweight profile functions are used only for the PowerShell-colliding command names `ls`, `cp`, `mv`, `rm`, `cat`, and `sort` so those names resolve to the real Unix executable instead of the built-in alias/cmdlet.
 - When `eza` is available, `ls` prefers `eza` over `ls.exe`. Classic `ls -lf` is translated to the closest `eza` equivalent.
 - The selected Oh My Posh theme is automatically patched after theme install to strip noisy right-prompt shell/time segments. `lightgreen.omp.json` also gets a more polished folder path. `Terminal-Icons` plus `CaskaydiaCove NF` provide the file/folder glyphs.
 
@@ -81,32 +81,12 @@ If needed:
 Enable-UnixTools -UserScope -InstallOptionalTools -InstallTerminalSetup -AddMingw -AddGitCmd -NormalizePath
 ```
 
-If an older install left shim wrappers behind, re-run:
-
-```powershell
-Enable-UnixTools
-```
-
-### `rg` regex with `|` runs pieces as commands
-
-If `rg -n "a|b|c"` prints messages like `'b' is not recognized as an internal or external command`, PowerShell is likely resolving `rg` through a stale Git `shims\rg.cmd` wrapper instead of a real `rg.exe`. Re-run the installer to clean shim paths and keep only real apps:
-
-```powershell
-Enable-UnixTools
-```
-
-Then open a new PowerShell session and verify:
-
-```powershell
-Get-Command rg -All | Format-List Name,Source
-```
-
 ### Codex shell shows `Terminal-Icons` or `oh-my-posh` startup warnings
 
 Codex and Antigravity shells can run with sandboxed or proxied startup behavior, so profile code that writes caches under `%APPDATA%` can be noisy. Current generated profiles automatically skip `Terminal-Icons` and `oh-my-posh` when Codex or Antigravity environment variables are present. Re-run profile installation to refresh an older profile:
 
 ```powershell
-Enable-UnixTools
+Enable-UnixTools -InstallFull -ProfileStartupMode Fast -PromptInitMode Lazy
 ```
 
 If you want Antigravity to opt in to the full prompt/theme anyway, add this to Antigravity settings:
@@ -151,12 +131,8 @@ powershell -ExecutionPolicy Bypass -File .\publish.ps1
 
 If publish prerequisites are missing, `publish.ps1` now auto-applies safe preflight fixes first (for example, adding/enabling dotnet `nuget.org` source). If a prerequisite still cannot be fixed automatically, it stops early and prints exact manual fix commands.
 
-`publish.ps1` supports and packages:
+`publish.ps1` stages the committed module wrapper, manifest, source tree, catalogs, and profile support files without regenerating module metadata. Package metadata comes from `Enable-UnixTools.psd1`.
 
-- tags
-- release notes
-- project/license/icon URIs
-- `README.md` (existing or auto-generated)
-- `about_<ModuleName>.help.txt` (existing or auto-generated)
+It also packages `README.md` and `about_<ModuleName>.help.txt`, using existing files when present and generating minimal fallbacks only when they are missing.
 
 If publish returns HTTP 403, your PSGallery API key is invalid/expired, not scoped for this package, or package ownership does not match the publishing account.

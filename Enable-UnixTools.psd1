@@ -39,7 +39,7 @@
     PrivateData       = @{
         PSData = @{
             Tags         = @('unix', 'windows', 'path', 'cli')
-            ReleaseNotes = 'Prefers real app executables on PATH and cleans up legacy shim layers during install or uninstall.'
+            ReleaseNotes = 'Prefers real app executables on PATH with lean managed profile support and optional tool installation.'
         }
     }
 }

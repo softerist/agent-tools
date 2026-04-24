@@ -22,20 +22,11 @@ function Get-ExecutionContext {
     $gitUsrBin = $null
     $gitMingwBin = $null
     $gitCmd = $null
-    $shimDir = $null
-    $userShimRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:USERPROFILE }
-    $userShimDir = Join-Path $userShimRoot 'UnixTools\shims'
 
     if ($gitRoot) {
         $gitUsrBin = Join-Path $gitRoot 'usr\bin'
         $gitMingwBin = Join-Path $gitRoot 'mingw64\bin'
         $gitCmd = Join-Path $gitRoot 'cmd'
-        if ($RuntimeContext.PathScope -eq 'User') {
-            $shimDir = $userShimDir
-        }
-        else {
-            $shimDir = Join-Path $gitRoot 'shims'
-        }
     }
 
     return [pscustomobject]@{
@@ -43,144 +34,8 @@ function Get-ExecutionContext {
         GitUsrBin           = $gitUsrBin
         GitMingwBin         = $gitMingwBin
         GitCmd              = $gitCmd
-        ShimDir             = $shimDir
-        UserShimDir         = $userShimDir
         OptionalToolCatalog = @(Get-OptionalToolCatalog -RuntimeContext $RuntimeContext)
         OptionalModuleCatalog = @(Get-OptionalPowerShellModuleCatalog -RuntimeContext $RuntimeContext)
-    }
-}
-
-function Get-ShimCandidateDirectoryList {
-    param(
-        [Parameter(Mandatory = $true)][psobject]$Context,
-        [Parameter(Mandatory = $true)][psobject]$RuntimeContext
-    )
-
-    if ($RuntimeContext.PathScope -eq 'User') {
-        $candidateShimDirs = @($Context.UserShimDir)
-        if ($Context.ShimDir) { $candidateShimDirs += $Context.ShimDir }
-    }
-    else {
-        $candidateShimDirs = @(
-            'C:\Program Files\Git\shims',
-            'C:\Program Files (x86)\Git\shims'
-        )
-        if ($Context.ShimDir) { $candidateShimDirs += $Context.ShimDir }
-    }
-
-    return @($candidateShimDirs | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
-}
-
-function Remove-LegacyShimDirectorySet {
-    [CmdletBinding(SupportsShouldProcess = $true)]
-    param(
-        [Parameter(Mandatory = $true)]$Cmdlet,
-        [Parameter(Mandatory = $true)][psobject]$State,
-        [Parameter(Mandatory = $true)][string[]]$ShimDirectories,
-        [Parameter(Mandatory = $true)][psobject]$RuntimeContext
-    )
-
-    foreach ($shimDirPath in @($ShimDirectories)) {
-        if ($Cmdlet.ShouldProcess($RuntimeContext.PathDisplay, "Remove shim directory entry $shimDirPath")) {
-            if (Remove-MachinePathEntry -pathsToRemove @($shimDirPath) -RuntimeContext $RuntimeContext) {
-                $State.DidChange = $true
-                Write-Status -Type ok -Label 'PATH entry removed' -Detail $shimDirPath -RuntimeContext $RuntimeContext
-            }
-        }
-
-        if (-not (Test-Path -LiteralPath $shimDirPath -PathType Container)) {
-            continue
-        }
-
-        if ($Cmdlet.ShouldProcess($shimDirPath, 'Delete generated .cmd shims')) {
-            if ($RuntimeContext.DryRun) {
-                Write-DryRun "Remove shim files from '$shimDirPath'"
-            }
-            else {
-                Get-ChildItem -LiteralPath $shimDirPath -Filter *.cmd -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-                try {
-                    Remove-Item -LiteralPath $shimDirPath -Force -ErrorAction Stop
-                }
-                catch {
-                    Write-Verbose "Shim directory not removed cleanly '$shimDirPath': $($_.Exception.Message)"
-                }
-            }
-            $State.DidChange = $true
-            Write-Status -Type ok -Label 'Shim files removed' -Detail $shimDirPath -RuntimeContext $RuntimeContext
-        }
-    }
-}
-
-function Remove-LegacyProfileShimSupport {
-    [CmdletBinding(SupportsShouldProcess = $true)]
-    param(
-        [Parameter(Mandatory = $true)]$Cmdlet,
-        [Parameter(Mandatory = $true)][psobject]$State,
-        [switch]$IncludeManagedProfileSupport,
-        [Parameter(Mandatory = $true)][psobject]$RuntimeContext
-    )
-
-    $profilePaths = @(Get-ManagedUserProfilePathList)
-    $profileStates = @(
-        foreach ($profilePath in $profilePaths) {
-            [pscustomobject]@{
-                Path = $profilePath
-                State = Get-ProfileInstallationState -ProfilePath $profilePath
-            }
-        }
-    )
-    $hasProfileShimSupport = @($profileStates | Where-Object {
-            ($IncludeManagedProfileSupport -and ($_.State.HasManagedBlocks -or $_.State.HasLoaderBlock)) -or
-            $_.State.HasMissingBlock -or
-            $_.State.HasAliasBlock -or
-            $_.State.HasSmartShellBlock -or
-            $_.State.HasLegacyFastBlock -or
-            $_.State.HasLegacyInlineBlock -or
-            $_.State.LegacyInlineStatus -eq 'Ambiguous'
-        }).Count -gt 0
-
-    $profileTarget = $profilePaths -join ', '
-    if ($hasProfileShimSupport -and $Cmdlet.ShouldProcess($profileTarget, 'Remove unix-tools profile shim blocks')) {
-        $removalResult = Remove-InstalledProfileSupport -RuntimeContext $RuntimeContext
-        $State.DidChange = $true
-        $removalDetail = if ($removalResult.Status -eq 'Removed') { 'unix-tools markers cleaned + legacy inline block removed' } else { 'unix-tools markers cleaned' }
-        Write-Status -Type ok -Label 'Profile blocks removed' -Detail $removalDetail -RuntimeContext $RuntimeContext
-    }
-
-    $legacyFastScriptCandidates = @()
-    if ($RuntimeContext.PathScope -eq 'User') {
-        if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
-            $legacyFastScriptCandidates += (Join-Path $env:LOCALAPPDATA 'UnixTools\Enable-UnixToolsFast.ps1')
-        }
-        if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
-            $legacyFastScriptCandidates += (Join-Path $env:USERPROFILE 'UnixTools\Enable-UnixToolsFast.ps1')
-        }
-    }
-    else {
-        if (-not [string]::IsNullOrWhiteSpace($env:ProgramData)) {
-            $legacyFastScriptCandidates += (Join-Path $env:ProgramData 'UnixToolsSystemWide\Enable-UnixToolsFast.ps1')
-        }
-    }
-
-    foreach ($legacyFastPath in ($legacyFastScriptCandidates | Select-Object -Unique)) {
-        if (-not (Test-Path -LiteralPath $legacyFastPath -PathType Leaf)) { continue }
-        if ($Cmdlet.ShouldProcess($legacyFastPath, 'Remove legacy Enable-UnixToolsFast.ps1 copy')) {
-            if ($RuntimeContext.DryRun) {
-                Write-DryRun "Remove-Item '$legacyFastPath' -Force"
-            }
-            else {
-                Remove-Item -LiteralPath $legacyFastPath -Force -ErrorAction SilentlyContinue
-                $legacyFastDir = Split-Path -Parent $legacyFastPath
-                if ($legacyFastDir -and (Test-Path -LiteralPath $legacyFastDir -PathType Container)) {
-                    $remaining = Get-ChildItem -LiteralPath $legacyFastDir -Force -ErrorAction SilentlyContinue
-                    if (-not $remaining) {
-                        Remove-Item -LiteralPath $legacyFastDir -Force -ErrorAction SilentlyContinue
-                    }
-                }
-            }
-            $State.DidChange = $true
-            Write-Status -Type ok -Label 'Legacy script removed' -Detail (Split-Path $legacyFastPath -Leaf) -RuntimeContext $RuntimeContext
-        }
     }
 }
 
@@ -211,15 +66,24 @@ function Invoke-UninstallFlow {
     param(
         [Parameter(Mandatory = $true)]$Cmdlet,
         [Parameter(Mandatory = $true)][psobject]$State,
-        [Parameter(Mandatory = $true)][psobject]$Context,
         [switch]$UninstallOptionalTools,
         [Parameter(Mandatory = $true)][psobject]$RuntimeContext
     )
 
     Write-Section 'Uninstall' -RuntimeContext $RuntimeContext
 
-    Remove-LegacyProfileShimSupport -Cmdlet $Cmdlet -State $State -IncludeManagedProfileSupport -RuntimeContext $RuntimeContext
-    Remove-LegacyShimDirectorySet -Cmdlet $Cmdlet -State $State -ShimDirectories (Get-ShimCandidateDirectoryList -Context $Context -RuntimeContext $RuntimeContext) -RuntimeContext $RuntimeContext
+    $profilePaths = @(Get-ManagedUserProfilePathList)
+    $profileTarget = if ($profilePaths.Count -gt 0) { $profilePaths -join ', ' } else { [string]$PROFILE.CurrentUserCurrentHost }
+    if ($Cmdlet.ShouldProcess($profileTarget, 'Remove unix-tools profile loader and prompt support')) {
+        $removalResult = Remove-InstalledProfileSupport -RuntimeContext $RuntimeContext
+        if ($removalResult.Status -eq 'Removed') {
+            $State.DidChange = $true
+            Write-Status -Type ok -Label 'Profile support removed' -Detail 'managed loader removed' -RuntimeContext $RuntimeContext
+        }
+        else {
+            Write-Status -Type info -Label 'Profile support' -Detail 'not installed' -RuntimeContext $RuntimeContext
+        }
+    }
 
     if ($UninstallOptionalTools) {
         if ($Cmdlet.ShouldProcess('Optional tools', 'Uninstall optional tools previously installed by this script')) {
@@ -430,29 +294,6 @@ function Invoke-OptionalToolFlow {
     }
     else {
         Write-Status -Type skip -Label 'Optional tools' -Detail 'skipped by -WhatIf/-Confirm' -RuntimeContext $RuntimeContext
-    }
-}
-
-function Invoke-ShimCleanupFlow {
-    [CmdletBinding(SupportsShouldProcess = $true)]
-    param(
-        [Parameter(Mandatory = $true)]$Cmdlet,
-        [Parameter(Mandatory = $true)][psobject]$State,
-        [Parameter(Mandatory = $true)][psobject]$Context,
-        [Parameter(Mandatory = $true)][psobject]$RuntimeContext
-    )
-
-    Write-Section 'Command Resolution' -RuntimeContext $RuntimeContext
-
-    if ($Cmdlet.ShouldProcess($RuntimeContext.PathDisplay, 'Remove legacy shim directories and profile shim blocks')) {
-        Remove-LegacyProfileShimSupport -Cmdlet $Cmdlet -State $State -RuntimeContext $RuntimeContext
-        Remove-LegacyShimDirectorySet -Cmdlet $Cmdlet -State $State -ShimDirectories (Get-ShimCandidateDirectoryList -Context $Context -RuntimeContext $RuntimeContext) -RuntimeContext $RuntimeContext
-        if (-not $State.DidChange) {
-            Write-Status -Type info -Label 'Legacy shims' -Detail 'not detected' -RuntimeContext $RuntimeContext
-        }
-    }
-    else {
-        Write-Status -Type skip -Label 'Shim cleanup' -Detail 'skipped by -WhatIf/-Confirm' -RuntimeContext $RuntimeContext
     }
 }
 

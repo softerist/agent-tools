@@ -15,8 +15,7 @@ Import-ScriptFunction -ScriptPath $modulePath -Names @(
     'Get-ProfileInstallationState',
     'Install-ProfileInlineSupport',
     'Remove-InstalledProfileSupport',
-    'Invoke-ProfileSetupFlow',
-    'Invoke-ShimCleanupFlow'
+    'Invoke-ProfileSetupFlow'
 )
 
 function New-IntegrationUserState {
@@ -195,9 +194,6 @@ Describe 'Integration flows' {
                 (Test-Path -LiteralPath (Join-Path $state.SupportRoot $fileName) -PathType Leaf) | Should Be $true
             }
 
-            Set-Content -Path (Join-Path $state.SupportRoot 'UnixTools.MissingShims.ps1') -Value '# legacy' -Encoding UTF8
-            Set-Content -Path (Join-Path $state.SupportRoot 'UnixTools.AliasCompat.ps1') -Value '# legacy' -Encoding UTF8
-
             Remove-InstalledProfileSupport -RuntimeContext $runtimeContext | Out-Null
 
             $removedAllHostsState = Get-ProfileInstallationState -ProfilePath $state.AllHostsProfilePath
@@ -284,38 +280,4 @@ Describe 'Integration flows' {
         }
     }
 
-    It 'shim cleanup does not remove the freshly installed managed profile loader during install flows' {
-        Invoke-WithTemporaryUserState {
-            param($state)
-
-            $runtimeContext = Initialize-IntegrationState
-            $stateBag = [pscustomobject]@{
-                DidChange = $false
-            }
-            $cmdletStub = [pscustomobject]@{}
-            $cmdletStub | Add-Member -MemberType ScriptMethod -Name ShouldProcess -Value {
-                param($target, $action)
-                $null = $target
-                $null = $action
-                return $true
-            }
-
-            Invoke-ProfileSetupFlow -Cmdlet $cmdletStub -State $stateBag -InstallFull -ThemesDir (Join-Path $state.Root 'Themes') -Theme 'lightgreen' -PromptInitMode Off -RuntimeContext $runtimeContext
-            Invoke-ShimCleanupFlow -Cmdlet $cmdletStub -State $stateBag -Context ([pscustomobject]@{
-                    UserShimDir = Join-Path $state.Root 'Shims'
-                    ShimDir = $null
-                }) -RuntimeContext $runtimeContext
-
-            $allHostsState = Get-ProfileInstallationState -ProfilePath $state.AllHostsProfilePath
-            $allHostsState.HasManagedBlocks | Should Be $true
-            $installedState = Get-ProfileInstallationState -ProfilePath $state.ProfilePath
-            $installedState.HasManagedBlocks | Should Be $true
-            $vsCodeProfileState = Get-ProfileInstallationState -ProfilePath $state.VSCodeProfilePath
-            $vsCodeProfileState.HasManagedBlocks | Should Be $true
-            $windowsPowerShellAllHostsProfileState = Get-ProfileInstallationState -ProfilePath $state.WindowsPowerShellAllHostsProfilePath
-            $windowsPowerShellAllHostsProfileState.HasManagedBlocks | Should Be $true
-            $windowsPowerShellProfileState = Get-ProfileInstallationState -ProfilePath $state.WindowsPowerShellProfilePath
-            $windowsPowerShellProfileState.HasManagedBlocks | Should Be $true
-        }
-    }
 }

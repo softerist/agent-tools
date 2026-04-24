@@ -39,13 +39,6 @@ function Get-ManagedProfileSupportFileNameList {
     )
 }
 
-function Get-ManagedLegacyProfileSupportFileNameList {
-    return @(
-        'UnixTools.MissingShims.ps1',
-        'UnixTools.AliasCompat.ps1'
-    )
-}
-
 function Get-ManagedProfileRuntimeCacheFileNameList {
     return @(
         'UnixTools.OhMyPosh.Init.ps1'
@@ -194,7 +187,7 @@ function Remove-ManagedProfileSupportPayload {
         return $supportRoot
     }
 
-    foreach ($fileName in (@(Get-ManagedProfileSupportFileNameList) + @(Get-ManagedLegacyProfileSupportFileNameList))) {
+    foreach ($fileName in Get-ManagedProfileSupportFileNameList) {
         $path = Join-Path $supportRoot $fileName
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             continue
