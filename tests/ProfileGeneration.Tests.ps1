@@ -47,6 +47,8 @@ Describe 'Generated profile blocks' {
         ($block -match 'function Initialize-UnixToolsPsReadLineState') | Should Be $true
         ($block -match 'function Invoke-UnixToolsDeferredZoxideCommand') | Should Be $false
         ($block -match [regex]::Escape("foreach (`$name in @('ls', 'cp', 'mv', 'rm', 'cat', 'sort', 'ssh'))")) | Should Be $true
+        ($block -match 'LS_COLORS') | Should Be $true
+        ($block -match 'EZA_COLORS') | Should Be $true
         ($block -match "Get-PreferredApplicationCommand -Name 'eza'") | Should Be $true
         ($block -match 'Import-Module \$module -ErrorAction SilentlyContinue -WarningAction SilentlyContinue 2>\$null 3>\$null \| Out-Null') | Should Be $true
         ($block -match 'PSFzf') | Should Be $false
@@ -68,6 +70,8 @@ Describe 'Generated profile blocks' {
         ($block -match 'ANTIGRAVITY_CLI_ALIAS') | Should Be $true
         ($block -match 'UNIXTOOLS_ALLOW_ANTIGRAVITY_FULL_PROMPT') | Should Be $true
         ($block -match "UnixToolsPromptState = 'Pending'") | Should Be $true
+        ($block -match 'Update-UnixToolsPromptThemeForQuietRightPrompt') | Should Be $true
+        ($block -match 'Set-UnixToolsPromptWithoutRightPrompt') | Should Be $true
         ($block -match 'function global:prompt') | Should Be $true
         ($block -match 'Invoke-UnixToolsDeferredInteractivePrompt') | Should Be $true
         ($block -match 'Enable-UnixInteractiveFeatureSet') | Should Be $true
@@ -81,6 +85,8 @@ Describe 'Generated profile blocks' {
         ($block -match 'ANTIGRAVITY_CLI_ALIAS') | Should Be $true
         ($block -match 'UNIXTOOLS_ALLOW_ANTIGRAVITY_FULL_PROMPT') | Should Be $true
         ($block -match 'Get-UnixToolsProfileConfig') | Should Be $true
+        ($block -match 'Update-UnixToolsPromptThemeForQuietRightPrompt') | Should Be $true
+        ($block -match 'Set-UnixToolsPromptWithoutRightPrompt') | Should Be $true
         ($block -match 'Invoke-UnixToolsCachedOhMyPoshInit') | Should Be $true
     }
 
@@ -154,13 +160,16 @@ Describe 'Generated profile blocks' {
             $themePath = Join-Path $themesDir 'jandedobbeleer.omp.json'
             @'
 {
-  "blocks": [
-    {
-      "type": "prompt",
-      "segments": [
-        { "type": "path" }
-      ]
-    },
+      "blocks": [
+        {
+          "type": "prompt",
+          "segments": [
+            {
+              "type": "path",
+              "foreground": "#ffffff"
+            }
+          ]
+        },
     {
       "type": "rprompt",
       "segments": [
@@ -176,6 +185,8 @@ Describe 'Generated profile blocks' {
 
             $theme = Get-Content -Raw -Path $themePath | ConvertFrom-Json
             (@($theme.blocks | Select-Object -ExpandProperty type) -contains 'rprompt') | Should Be $false
+            $theme.blocks[0].segments[0].foreground | Should Be '#111111'
+            $theme.blocks[0].segments[0].template | Should Be '<#111111>   {{ .Path }} </>'
         }
         finally {
             Remove-Item -Path $themesDir -Recurse -Force -ErrorAction SilentlyContinue

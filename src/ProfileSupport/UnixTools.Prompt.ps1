@@ -5,6 +5,65 @@ if (-not [string]::IsNullOrWhiteSpace($env:UNIXTOOLS_ALLOW_ANTIGRAVITY_FULL_PROM
 }
 $isAntigravityAgentShell = $env:ANTIGRAVITY_CLI_ALIAS -and -not $allowAntigravityFullPrompt
 
+function Update-UnixToolsPromptThemeForQuietRightPrompt {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Profile startup quietly normalizes the managed Oh My Posh theme before initialization.')]
+    param([Parameter(Mandatory = $true)][string]$ConfigPath)
+
+    if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
+        return $false
+    }
+
+    try {
+        $themeJson = Get-Content -Raw -Path $ConfigPath | ConvertFrom-Json
+        $rpromptBlock = @($themeJson.blocks | Where-Object { $_.type -eq 'rprompt' } | Select-Object -First 1)
+        if ($rpromptBlock.Count -eq 0) {
+            return $false
+        }
+
+        $block = $rpromptBlock[0]
+        $block.segments = @($block.segments | Where-Object { $_.type -notin @('executiontime', 'sysinfo', 'battery', 'shell', 'time') })
+        if (@($block.segments).Count -eq 0) {
+            $themeJson.blocks = @($themeJson.blocks | Where-Object { $_.type -ne 'rprompt' })
+        }
+
+        $themeJson | ConvertTo-Json -Depth 100 | Set-Content -Path $ConfigPath -Encoding UTF8
+        return $true
+    }
+    catch {
+        Write-Verbose "Could not remove Oh My Posh right prompt segments from '$ConfigPath': $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Set-UnixToolsPromptWithoutRightPrompt {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Profile startup wraps the interactive prompt in the current session only.')]
+    $currentPrompt = Get-Command prompt -CommandType Function -ErrorAction SilentlyContinue
+    if (-not $currentPrompt) {
+        return
+    }
+
+    $basePrompt = $currentPrompt.ScriptBlock
+    $wrapper = {
+        $output = & $basePrompt
+        if ($null -eq $output) {
+            return $output
+        }
+
+        $text = @($output) -join "`n"
+        $text = [regex]::Replace($text, "`e7.*?`e8", '', 'Singleline')
+        $text = [regex]::Replace($text, "`e\[s.*?`e\[u", '', 'Singleline')
+        return $text
+    }.GetNewClosure()
+
+    Set-Item -Path Function:\Global:prompt -Value $wrapper
+}
+
+function Reset-UnixToolsOhMyPoshState {
+    if (Get-Module oh-my-posh-core -ErrorAction SilentlyContinue) {
+        Remove-Module oh-my-posh-core -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-UnixToolsCachedOhMyPoshInit {
     param([Parameter(Mandatory = $true)][string]$ConfigPath)
 
@@ -18,6 +77,8 @@ function Invoke-UnixToolsCachedOhMyPoshInit {
     if (-not $ohMyPoshCommand) {
         return
     }
+
+    Reset-UnixToolsOhMyPoshState
 
     $cachePath = Join-Path $profileConfig.SupportRoot 'UnixTools.OhMyPosh.Init.ps1'
     $exePath = [string]$ohMyPoshCommand.Source
@@ -132,6 +193,18 @@ if ($profileConfig -and -not $env:CODEX_THREAD_ID -and -not $env:CODEX_INTERNAL_
     }
 
     if ($configPath) {
+        if (Update-UnixToolsPromptThemeForQuietRightPrompt -ConfigPath $configPath) {
+            $cachePath = if ($profileConfig -and -not [string]::IsNullOrWhiteSpace($profileConfig.SupportRoot)) {
+                Join-Path $profileConfig.SupportRoot 'UnixTools.OhMyPosh.Init.ps1'
+            }
+            else {
+                $null
+            }
+            if ($cachePath -and (Test-Path -LiteralPath $cachePath -PathType Leaf)) {
+                Remove-Item -LiteralPath $cachePath -Force -ErrorAction SilentlyContinue
+            }
+        }
+
         switch ($profileConfig.PromptInitMode) {
             'Eager' {
                 $loadInteractiveFeaturesNow = $profileConfig.StartupMode -eq 'Legacy'
@@ -139,6 +212,7 @@ if ($profileConfig -and -not $env:CODEX_THREAD_ID -and -not $env:CODEX_INTERNAL_
                     Enable-UnixInteractiveFeatureSet
                 }
                 Invoke-UnixToolsCachedOhMyPoshInit -ConfigPath $configPath
+                Set-UnixToolsPromptWithoutRightPrompt
                 if (-not $loadInteractiveFeaturesNow) {
                     Invoke-UnixToolsDeferredInteractivePrompt
                 }
@@ -161,6 +235,7 @@ if ($profileConfig -and -not $env:CODEX_THREAD_ID -and -not $env:CODEX_INTERNAL_
                             Enable-UnixInteractiveFeatureSet
                         }
                         Invoke-UnixToolsCachedOhMyPoshInit -ConfigPath $configPath
+                        Set-UnixToolsPromptWithoutRightPrompt
                         if (-not $loadInteractiveFeaturesNow) {
                             Invoke-UnixToolsDeferredInteractivePrompt
                         }

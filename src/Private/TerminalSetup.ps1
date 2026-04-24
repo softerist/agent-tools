@@ -83,6 +83,14 @@ function Update-ManagedOhMyPoshTheme {
             }
         }
 
+        if ($themeName -eq 'jandedobbeleer' -and $promptBlock) {
+            $pathSegment = $promptBlock.segments | Where-Object { $_.type -eq 'path' } | Select-Object -First 1
+            if ($pathSegment) {
+                Add-Member -InputObject $pathSegment -MemberType NoteProperty -Name foreground -Value '#111111' -Force
+                Add-Member -InputObject $pathSegment -MemberType NoteProperty -Name template -Value '<#111111>   {{ .Path }} </>' -Force
+            }
+        }
+
         if ($rpromptBlock) {
             $rpromptBlock.segments = @($rpromptBlock.segments | Where-Object { $_.type -notin @('executiontime', 'sysinfo', 'battery', 'shell', 'time') })
             if (@($rpromptBlock.segments).Count -eq 0) {

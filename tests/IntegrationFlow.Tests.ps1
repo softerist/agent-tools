@@ -194,6 +194,8 @@ Describe 'Integration flows' {
                 (Test-Path -LiteralPath (Join-Path $state.SupportRoot $fileName) -PathType Leaf) | Should Be $true
             }
 
+            Set-Content -Path (Join-Path $state.SupportRoot 'UnixTools.ObsoleteCache.ps1') -Value '# stale managed cache' -Encoding UTF8
+
             Remove-InstalledProfileSupport -RuntimeContext $runtimeContext | Out-Null
 
             $removedAllHostsState = Get-ProfileInstallationState -ProfilePath $state.AllHostsProfilePath

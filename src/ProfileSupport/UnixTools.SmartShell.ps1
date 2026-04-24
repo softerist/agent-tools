@@ -11,6 +11,27 @@ if ($Host.Name -eq 'ConsoleHost' -or $Host.Name -eq 'Visual Studio Code Host') {
         $env:PATH = "$winGetLinks;$env:PATH"
     }
 
+    $managedLsColors = 'di=38;5;39:ln=38;5;45:ex=38;5;82:*.ps1=38;5;220:*.json=38;5;229:*.md=38;5;229'
+    $managedEzaColors = 'di=38;5;39:ln=38;5;45:ex=38;5;82:da=38;5;111:ur=38;5;244:uw=38;5;118:ux=38;5;118:gr=38;5;244:gw=38;5;118:gx=38;5;118:tr=38;5;244:tw=38;5;118:tx=38;5;118'
+    $knownManagedLsColors = @(
+        $managedLsColors,
+        'di=38;5;75:ln=38;5;51:ex=38;5;82:*.ps1=38;5;220:*.json=38;5;229:*.md=38;5;229'
+    )
+    $knownManagedEzaColors = @(
+        $managedEzaColors,
+        'di=38;5;39:ln=38;5;45:ex=38;5;82:da=1;38;5;195:ur=38;5;244:uw=38;5;118:ux=38;5;118:gr=38;5;244:gw=38;5;118:gx=38;5;118:tr=38;5;244:tw=38;5;118:tx=38;5;118',
+        'di=38;5;39:ln=38;5;45:ex=38;5;82:da=38;5;117:ur=38;5;244:uw=38;5;118:ux=38;5;118:gr=38;5;244:gw=38;5;118:gx=38;5;118:tr=38;5;244:tw=38;5;118:tx=38;5;118',
+        'di=38;5;75:ln=38;5;51:ex=38;5;82:ur=38;5;244:uw=38;5;118:ux=38;5;118:gr=38;5;244:gw=38;5;118:gx=38;5;118:tr=38;5;244:tw=38;5;118:tx=38;5;118'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($env:LS_COLORS) -or $env:LS_COLORS -in $knownManagedLsColors) {
+        $env:LS_COLORS = $managedLsColors
+    }
+
+    if ([string]::IsNullOrWhiteSpace($env:EZA_COLORS) -or $env:EZA_COLORS -in $knownManagedEzaColors) {
+        $env:EZA_COLORS = $managedEzaColors
+    }
+
     foreach ($name in @('ls', 'cp', 'mv', 'rm', 'cat', 'sort', 'ssh')) {
         Reset-UnixShimName -Name $name
 

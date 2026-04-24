@@ -215,11 +215,11 @@ function Remove-ManagedProfileSupportPayload {
         }
     }
 
-    if (-not $RuntimeContext.DryRun) {
-        $remaining = Get-ChildItem -LiteralPath $supportRoot -Force -ErrorAction SilentlyContinue
-        if (-not $remaining) {
-            Remove-Item -LiteralPath $supportRoot -Force -ErrorAction SilentlyContinue
-        }
+    if ($RuntimeContext.DryRun) {
+        Write-DryRun "Remove managed profile support directory '$supportRoot'"
+    }
+    else {
+        Remove-Item -LiteralPath $supportRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 
     return $supportRoot
