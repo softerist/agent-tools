@@ -22,7 +22,7 @@ Describe 'Generated profile blocks' {
         ($shared -match 'function Get-UnixShimExecutable') | Should Be $true
         ($loader -match 'UnixTools\.MissingShims\.ps1') | Should Be $false
         ($loader -match 'UnixTools\.AliasCompat\.ps1') | Should Be $false
-        ($smartShell -match 'Get-PreferredApplicationCommand -Name \$candidate') | Should Be $true
+        ($smartShell -match 'Get-PreferredApplicationCommand -Name \$commandName') | Should Be $true
     }
 
     It 'suppresses optional module import noise in the smart-shell block' {
@@ -46,10 +46,12 @@ Describe 'Generated profile blocks' {
         ($block -match 'function Enable-UnixInteractiveFeatureSet') | Should Be $true
         ($block -match "StartupMode -eq 'Legacy'") | Should Be $true
         ($block -match 'function Initialize-UnixToolsPsReadLineState') | Should Be $true
-        ($block -match 'function Invoke-UnixToolsDeferredZoxideCommand') | Should Be $true
+        ($block -match 'function Invoke-UnixToolsDeferredZoxideCommand') | Should Be $false
         ($block -match [regex]::Escape("foreach (`$name in @('ls', 'cp', 'mv', 'rm', 'cat', 'sort', 'ssh'))")) | Should Be $true
         ($block -match "Get-PreferredApplicationCommand -Name 'eza'") | Should Be $true
         ($block -match 'Import-Module \$module -ErrorAction SilentlyContinue -WarningAction SilentlyContinue 2>\$null 3>\$null \| Out-Null') | Should Be $true
+        ($block -match 'PSFzf') | Should Be $false
+        ($block -match 'ZLocation') | Should Be $false
     }
 
     It 'builds a legacy smart-shell block that eagerly enables interactive features' {
@@ -279,10 +281,6 @@ echo LS_PASSTHROUGH %*
             Remove-Item Function:\Global:rm -ErrorAction SilentlyContinue
             Remove-Item Function:\Global:cat -ErrorAction SilentlyContinue
             Remove-Item Function:\Global:sort -ErrorAction SilentlyContinue
-            Remove-Item Function:\Global:j -ErrorAction SilentlyContinue
-            Remove-Item Function:\Global:ji -ErrorAction SilentlyContinue
-            Remove-Item Function:\Global:y -ErrorAction SilentlyContinue
-            Remove-Item Function:\Global:lg -ErrorAction SilentlyContinue
             Remove-Item Alias:\Global:Enable-UnixInteractiveFeatures -ErrorAction SilentlyContinue
             Remove-Variable UnixToolsProfileConfig -Scope Global -ErrorAction SilentlyContinue
             Remove-Item -Path $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -338,10 +336,6 @@ echo EZA_PASSTHROUGH %*
             Remove-Item Function:\Global:rm -ErrorAction SilentlyContinue
             Remove-Item Function:\Global:cat -ErrorAction SilentlyContinue
             Remove-Item Function:\Global:sort -ErrorAction SilentlyContinue
-            Remove-Item Function:\Global:j -ErrorAction SilentlyContinue
-            Remove-Item Function:\Global:ji -ErrorAction SilentlyContinue
-            Remove-Item Function:\Global:y -ErrorAction SilentlyContinue
-            Remove-Item Function:\Global:lg -ErrorAction SilentlyContinue
             Remove-Item Alias:\Global:Enable-UnixInteractiveFeatures -ErrorAction SilentlyContinue
             Remove-Variable UnixToolsProfileConfig -Scope Global -ErrorAction SilentlyContinue
             Remove-Item -Path $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -391,10 +385,6 @@ echo SSH_PASSTHROUGH %*
             Remove-Item Function:\Global:rm -ErrorAction SilentlyContinue
             Remove-Item Function:\Global:cat -ErrorAction SilentlyContinue
             Remove-Item Function:\Global:sort -ErrorAction SilentlyContinue
-            Remove-Item Function:\Global:j -ErrorAction SilentlyContinue
-            Remove-Item Function:\Global:ji -ErrorAction SilentlyContinue
-            Remove-Item Function:\Global:y -ErrorAction SilentlyContinue
-            Remove-Item Function:\Global:lg -ErrorAction SilentlyContinue
             Remove-Item Alias:\Global:Enable-UnixInteractiveFeatures -ErrorAction SilentlyContinue
             Remove-Variable UnixToolsProfileConfig -Scope Global -ErrorAction SilentlyContinue
             Remove-Item -Path $tempRoot -Recurse -Force -ErrorAction SilentlyContinue

@@ -48,8 +48,7 @@ function Get-ManagedLegacyProfileSupportFileNameList {
 
 function Get-ManagedProfileRuntimeCacheFileNameList {
     return @(
-        'UnixTools.OhMyPosh.Init.ps1',
-        'UnixTools.Zoxide.Init.ps1'
+        'UnixTools.OhMyPosh.Init.ps1'
     )
 }
 
@@ -155,21 +154,6 @@ function Initialize-ManagedProfileStartupCacheSet {
                 }
             }
         }
-    }
-
-    $zoxideCommand = Get-Command zoxide -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($zoxideCommand) {
-        $exePath = [string]$zoxideCommand.Source
-        $escapedExePath = $exePath.Replace("'", "''")
-        $generated = & $exePath init powershell --cmd j | Out-String
-        $cacheContent = @(
-            '# Kind: Zoxide'
-            "# ExePath: $escapedExePath"
-            "# ExeStamp: $(Get-ProfileSupportCacheStamp -Path $exePath)"
-            $generated
-            ''
-        ) -join "`n"
-        Write-AtomicUtf8File -Path (Join-Path $SupportRoot 'UnixTools.Zoxide.Init.ps1') -Content $cacheContent -RuntimeContext $RuntimeContext
     }
 }
 
